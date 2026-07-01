@@ -1,0 +1,15 @@
+{
+  "name": "ETS Control de Equipos",
+  "short_name": "ETS Control",
+  "description": "Control de ubicación de maquinaria y equipos de ETS.",
+  "start_url": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#16233a",
+  "theme_color": "#16233a",
+  "icons": [
+    { "src": "/icon-192.png", "type": "image/png", "sizes": "192x192" },
+    { "src": "/icon-512.png", "type": "image/png", "sizes": "512x512" },
+    { "src": "/icon-512.png", "type": "image/png", "sizes": "512x512", "purpose": "maskable" }
+  ]
+}
