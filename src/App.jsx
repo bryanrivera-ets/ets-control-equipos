@@ -1,8 +1,11 @@
 import { useState, useEffect, useMemo, useCallback } from "react";
 import { supabase } from "./supabaseClient";
+import heroBg from "./assets/hero.png";
+import etsLogo from "./assets/ets-logo.png";
 import {
   Bell, CircleUser, Search, ChevronRight, ArrowLeft, Plus, LogOut,
   Home, Boxes, ArrowLeftRight, BarChart3, Check, ChevronDown, Loader2,
+  Ban, RotateCcw, Trash2, AlertTriangle,
   Zap, Droplets, Cog, Flame, Hammer, Gauge, Wrench, Activity,
   Warehouse, HardHat, Truck,
 } from "lucide-react";
@@ -79,18 +82,18 @@ function Login({ onLogin }) {
   const brigadas = usuarios.filter((u) => u.rol === "brigada");
 
   return (
-    <div className="min-h-screen w-full flex items-center justify-center p-6"
-      style={{ background: NAVY, fontFamily: FONT, paddingTop: SAFE_TOP }}>
-      <div className="w-full max-w-md">
-        <div className="text-center mb-6">
-          <div className="rounded-2xl inline-flex items-center justify-center font-medium" style={{ width: 68, height: 68, background: AMBER, color: NAVY, fontSize: 23 }}>ETS</div>
-          <div className="text-white font-medium mt-4" style={{ fontSize: 22 }}>Control de equipos</div>
-          <div style={{ color: NAVY_SOFT, fontSize: 14 }}>Almacén principal · Caguas</div>
-        </div>
+    <div className="relative min-h-screen w-full flex items-center justify-center p-6"
+      style={{ fontFamily: FONT, paddingTop: SAFE_TOP, backgroundImage: `url(${heroBg})`, backgroundSize: "cover", backgroundPosition: "center" }}>
+      <div className="absolute inset-0" style={{ background: "rgba(22,35,58,0.74)" }} />
 
-        <div className="bg-slate-100 rounded-2xl p-5">
-          {cargando && <div className="flex justify-center py-10 text-slate-400"><Loader2 className="animate-spin" /></div>}
-          {errCarga && <div className="text-center text-red-600 text-sm py-8">{errCarga}</div>}
+      <div className="relative w-full max-w-md">
+        <div className="bg-white rounded-2xl shadow-xl p-6">
+          <img src={etsLogo} alt="ETS — Epoxy Technologies Systems" className="mx-auto" style={{ width: 210 }} />
+          <div className="text-center text-slate-500 mt-3" style={{ fontSize: 13 }}>Control de equipos · Almacén principal</div>
+          <div className="border-t border-slate-200 my-4" />
+
+          {cargando && <div className="flex justify-center py-8 text-slate-400"><Loader2 className="animate-spin" /></div>}
+          {errCarga && <div className="text-center text-red-600 text-sm py-6">{errCarga}</div>}
 
           {!cargando && !errCarga && !sel && (
             <>
@@ -130,6 +133,7 @@ function Login({ onLogin }) {
             </div>
           )}
         </div>
+        <div className="text-center mt-4" style={{ color: "rgba(255,255,255,0.75)", fontSize: 12 }}>ETS Corporation · Caguas, Puerto Rico</div>
       </div>
     </div>
   );
@@ -137,7 +141,7 @@ function Login({ onLogin }) {
 
 function UserRow({ u, onClick }) {
   return (
-    <button onClick={onClick} className="bg-white rounded-xl border border-slate-200 p-3 flex items-center gap-3 text-left" style={{ minHeight: 60 }}>
+    <button onClick={onClick} className="bg-slate-50 rounded-xl border border-slate-200 p-3 flex items-center gap-3 text-left" style={{ minHeight: 60 }}>
       <div className="rounded-full flex items-center justify-center shrink-0" style={{ width: 40, height: 40, background: "#eef1f6", color: NAVY }}>
         <CircleUser size={23} />
       </div>
@@ -158,6 +162,8 @@ function Main({ session, onLogout }) {
   const [cargando, setCargando] = useState(true);
   const [view, setView] = useState("list");
   const [selectedId, setSelectedId] = useState(null);
+  const [detailBack, setDetailBack] = useState("list");
+  const [moveBack, setMoveBack] = useState("detail");
   const [filtro, setFiltro] = useState("todos");
   const [query, setQuery] = useState("");
   const [movs, setMovs] = useState([]);
@@ -176,38 +182,34 @@ function Main({ session, onLogout }) {
 
   useEffect(() => { cargarDatos(); }, [cargarDatos]);
 
-  const abrir = async (id) => {
-    setSelectedId(id); setView("detail"); setMovs([]);
+  const openDetail = useCallback(async (id, from = "list") => {
+    setSelectedId(id); setDetailBack(from); setView("detail"); setMovs([]);
     const { data } = await supabase.from("movimientos").select("*").eq("equipo_id", id).order("created_at", { ascending: false });
     setMovs(data || []);
-  };
+  }, []);
+
+  const openMove = (id) => { setSelectedId(id); setDetailBack("list"); setMoveBack("mover"); setView("move"); };
 
   const selected = equipos.find((e) => e.id === selectedId);
 
   const conteo = useMemo(() => {
     const c = { almacen: 0, proyecto: 0, camion: 0, taller: 0 };
-    equipos.forEach((e) => (c[e.ubicacion_tipo] += 1));
+    equipos.forEach((e) => { if (e.condicion !== "baja") c[e.ubicacion_tipo] += 1; });
     return c;
   }, [equipos]);
 
-  const listados = useMemo(() => equipos.filter((e) => {
-    const okF = filtro === "todos" || e.ubicacion_tipo === filtro;
-    const q = query.trim().toLowerCase();
-    const okQ = !q || e.nombre.toLowerCase().includes(q) || (e.serie || "").toLowerCase().includes(q);
-    return okF && okQ;
-  }), [equipos, filtro, query]);
-
   const mover = async (tipo, detalle, nota) => {
+    const eq = selected;
     await supabase.from("equipos").update({
       ubicacion_tipo: tipo, ubicacion_detalle: detalle, updated_at: new Date().toISOString(),
-    }).eq("id", selected.id);
+    }).eq("id", eq.id);
     await supabase.from("movimientos").insert({
-      equipo_id: selected.id, usuario_id: session.id, usuario_nombre: session.nombre,
-      de_tipo: selected.ubicacion_tipo, de_detalle: selected.ubicacion_detalle,
+      equipo_id: eq.id, usuario_id: session.id, usuario_nombre: session.nombre,
+      de_tipo: eq.ubicacion_tipo, de_detalle: eq.ubicacion_detalle,
       a_tipo: tipo, a_detalle: detalle, nota: nota || null,
     });
     await cargarDatos();
-    await abrir(selected.id);
+    await openDetail(eq.id, detailBack || "list");
   };
 
   const agregar = async ({ nombre, serie, cat, detalle }) => {
@@ -220,8 +222,26 @@ function Main({ session, onLogout }) {
         a_tipo: "almacen", a_detalle: detalle, nota: "Alta de equipo",
       });
       await cargarDatos();
-      await abrir(data.id);
+      await openDetail(data.id, "list");
     }
+  };
+
+  const darBaja = async (eq) => {
+    const nueva = eq.condicion === "baja" ? "operativo" : "baja";
+    await supabase.from("equipos").update({ condicion: nueva, updated_at: new Date().toISOString() }).eq("id", eq.id);
+    await supabase.from("movimientos").insert({
+      equipo_id: eq.id, usuario_id: session.id, usuario_nombre: session.nombre,
+      a_tipo: eq.ubicacion_tipo, a_detalle: eq.ubicacion_detalle,
+      nota: nueva === "baja" ? "Dado de baja" : "Reactivado",
+    });
+    await cargarDatos();
+    await openDetail(eq.id, detailBack);
+  };
+
+  const eliminar = async (eq) => {
+    await supabase.from("equipos").delete().eq("id", eq.id);
+    await cargarDatos();
+    setView(detailBack || "list");
   };
 
   return (
@@ -231,15 +251,24 @@ function Main({ session, onLogout }) {
       ) : (
         <div className="flex-1 flex flex-col">
           {view === "list" && (
-            <ListView equipos={listados} conteo={conteo} filtro={filtro} setFiltro={setFiltro}
-              query={query} setQuery={setQuery} abrir={abrir} session={session} onLogout={onLogout} />
+            <ListView modo="inicio" equipos={equipos} conteo={conteo} filtro={filtro} setFiltro={setFiltro}
+              query={query} setQuery={setQuery} onItem={(id) => openDetail(id, "list")} session={session} onLogout={onLogout} />
+          )}
+          {view === "equipos" && (
+            <ListView modo="equipos" equipos={equipos} conteo={conteo} filtro={filtro} setFiltro={setFiltro}
+              query={query} setQuery={setQuery} onItem={(id) => openDetail(id, "equipos")} />
+          )}
+          {view === "mover" && (
+            <ListView modo="mover" equipos={equipos} conteo={conteo} filtro={filtro} setFiltro={setFiltro}
+              query={query} setQuery={setQuery} onItem={(id) => openMove(id)} />
           )}
           {view === "detail" && selected && (
-            <DetailView equipo={selected} movs={movs} onBack={() => setView("list")} onMover={() => setView("move")} />
+            <DetailView equipo={selected} movs={movs} onBack={() => setView(detailBack)}
+              onMover={() => { setMoveBack("detail"); setView("move"); }} onBaja={darBaja} onEliminar={eliminar} />
           )}
           {view === "move" && selected && (
             <MoveView equipo={selected} ubicaciones={ubicaciones} brigadas={brigadas}
-              onBack={() => setView("detail")} onConfirm={async (t, d, n) => { await mover(t, d, n); setView("detail"); }} />
+              onBack={() => setView(moveBack)} onConfirm={async (t, d, n) => { await mover(t, d, n); }} />
           )}
           {view === "nuevo" && (
             <NuevoView ubicaciones={ubicaciones} onBack={() => setView("list")} onSave={async (eq) => { await agregar(eq); }} />
@@ -252,8 +281,10 @@ function Main({ session, onLogout }) {
   );
 }
 
-function Pill({ tipo }) {
-  const m = tipoMeta[tipo];
+function Pill({ equipo }) {
+  if (equipo.condicion === "baja")
+    return <span className="px-2.5 py-1 rounded-md whitespace-nowrap bg-slate-200 text-slate-600" style={{ fontSize: 12 }}>Retirado</span>;
+  const m = tipoMeta[equipo.ubicacion_tipo];
   return <span className={`px-2.5 py-1 rounded-md whitespace-nowrap ${m.pill}`} style={{ fontSize: 12 }}>{m.label}</span>;
 }
 function CatTile({ cat, size = 44 }) {
@@ -265,44 +296,71 @@ function CatTile({ cat, size = 44 }) {
   );
 }
 
-function ListView({ equipos, conteo, filtro, setFiltro, query, setQuery, abrir, session, onLogout }) {
+function ListView({ modo, equipos, conteo, filtro, setFiltro, query, setQuery, onItem, session, onLogout }) {
   const cards = [["almacen", "Almacén"], ["proyecto", "Proyecto"], ["camion", "Camión"], ["taller", "Taller"]];
   const chips = [["todos", "Todos"], ["almacen", "Almacén"], ["proyecto", "Proyecto"], ["camion", "Camión"], ["taller", "Taller"]];
+  if (modo === "equipos") chips.push(["retirados", "Retirados"]);
+
+  const q = query.trim().toLowerCase();
+  const visibles = equipos.filter((e) => {
+    const matchQ = !q || e.nombre.toLowerCase().includes(q) || (e.serie || "").toLowerCase().includes(q);
+    if (!matchQ) return false;
+    const esBaja = e.condicion === "baja";
+    if (modo === "equipos") {
+      if (filtro === "retirados") return esBaja;
+      if (esBaja) return false;
+      return filtro === "todos" || e.ubicacion_tipo === filtro;
+    }
+    if (esBaja) return false;
+    return filtro === "todos" || e.ubicacion_tipo === filtro;
+  });
+
   return (
     <div className="flex-1 pb-28">
       <div style={{ background: NAVY, paddingTop: SAFE_TOP }} className="px-5 pb-5">
         <div className={`${WRAP} flex items-center justify-between`}>
-          <div className="flex items-center gap-3">
-            <div className="rounded-lg flex items-center justify-center font-medium text-sm" style={{ width: 40, height: 40, background: AMBER, color: NAVY }}>ETS</div>
+          {modo === "inicio" ? (
+            <>
+              <div className="flex items-center gap-3">
+                <div className="rounded-lg flex items-center justify-center font-medium text-sm" style={{ width: 40, height: 40, background: AMBER, color: NAVY }}>ETS</div>
+                <div>
+                  <div className="text-white font-medium leading-tight" style={{ fontSize: 17 }}>Control de equipos</div>
+                  <div style={{ color: NAVY_SOFT, fontSize: 12 }}>{session.nombre} · {session.brigada || "Supervisor"}</div>
+                </div>
+              </div>
+              <div className="flex gap-5 items-center" style={{ color: "#cdd6e4" }}>
+                <Bell size={21} />
+                <button onClick={onLogout} title="Salir"><LogOut size={20} /></button>
+              </div>
+            </>
+          ) : (
             <div>
-              <div className="text-white font-medium leading-tight" style={{ fontSize: 17 }}>Control de equipos</div>
-              <div style={{ color: NAVY_SOFT, fontSize: 12 }}>{session.nombre} · {session.brigada || "Supervisor"}</div>
+              <div className="text-white font-medium" style={{ fontSize: 18 }}>{modo === "equipos" ? "Equipos" : "Mover equipo"}</div>
+              <div style={{ color: NAVY_SOFT, fontSize: 12 }}>{modo === "equipos" ? "Inventario completo" : "Escoge la máquina que vas a mover"}</div>
             </div>
-          </div>
-          <div className="flex gap-5 items-center" style={{ color: "#cdd6e4" }}>
-            <Bell size={21} />
-            <button onClick={onLogout} title="Salir"><LogOut size={20} /></button>
-          </div>
+          )}
         </div>
       </div>
 
       <div className={WRAP}>
-        <div className="px-4 -mt-3">
-          <div className="grid grid-cols-4 gap-2">
-            {cards.map(([k, t]) => (
-              <button key={k} onClick={() => setFiltro(filtro === k ? "todos" : k)}
-                className={`bg-white rounded-xl p-3 text-left border ${filtro === k ? "border-slate-400" : "border-slate-200"}`}>
-                <div className="font-medium" style={{ color: NAVY, fontSize: 22 }}>{conteo[k]}</div>
-                <div className="flex items-center gap-1 mt-1">
-                  <span className="rounded-full" style={{ width: 7, height: 7, background: tipoMeta[k].dot }} />
-                  <span className="text-slate-500" style={{ fontSize: 12 }}>{t}</span>
-                </div>
-              </button>
-            ))}
+        {modo === "inicio" && (
+          <div className="px-4 -mt-3">
+            <div className="grid grid-cols-4 gap-2">
+              {cards.map(([k, t]) => (
+                <button key={k} onClick={() => setFiltro(filtro === k ? "todos" : k)}
+                  className={`bg-white rounded-xl p-3 text-left border ${filtro === k ? "border-slate-400" : "border-slate-200"}`}>
+                  <div className="font-medium" style={{ color: NAVY, fontSize: 22 }}>{conteo[k]}</div>
+                  <div className="flex items-center gap-1 mt-1">
+                    <span className="rounded-full" style={{ width: 7, height: 7, background: tipoMeta[k].dot }} />
+                    <span className="text-slate-500" style={{ fontSize: 12 }}>{t}</span>
+                  </div>
+                </button>
+              ))}
+            </div>
           </div>
-        </div>
+        )}
 
-        <div className="px-4 mt-4">
+        <div className={`px-4 ${modo === "inicio" ? "mt-4" : "mt-4"}`}>
           <div className="flex items-center gap-2 bg-white rounded-lg px-3 border border-slate-200" style={{ height: 46 }}>
             <Search size={18} className="text-slate-400" />
             <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Buscar equipo o número de serie"
@@ -319,15 +377,15 @@ function ListView({ equipos, conteo, filtro, setFiltro, query, setQuery, abrir, 
         </div>
 
         <div className="px-4 mt-3 grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-          {equipos.length === 0 && <div className="text-center text-slate-400 text-sm py-10 sm:col-span-2">No hay equipos en este filtro.</div>}
-          {equipos.map((e) => (
-            <button key={e.id} onClick={() => abrir(e.id)} className="bg-white rounded-xl border border-slate-200 p-3 flex items-center gap-3 text-left" style={{ minHeight: 70 }}>
+          {visibles.length === 0 && <div className="text-center text-slate-400 text-sm py-10 sm:col-span-2">No hay equipos aquí.</div>}
+          {visibles.map((e) => (
+            <button key={e.id} onClick={() => onItem(e.id)} className="bg-white rounded-xl border border-slate-200 p-3 flex items-center gap-3 text-left" style={{ minHeight: 70 }}>
               <CatTile cat={e.categoria} />
               <div className="flex-1 min-w-0">
                 <div className="font-medium text-slate-800 truncate" style={{ fontSize: 15 }}>{e.nombre}</div>
                 <div className="text-slate-400 truncate" style={{ fontSize: 12 }}>{e.serie} · {e.ubicacion_detalle}</div>
               </div>
-              <Pill tipo={e.ubicacion_tipo} />
+              <Pill equipo={e} />
               <ChevronRight size={18} className="text-slate-300 shrink-0" />
             </button>
           ))}
@@ -348,8 +406,12 @@ function SubHeader({ title, onBack }) {
   );
 }
 
-function DetailView({ equipo, movs, onBack, onMover }) {
+function DetailView({ equipo, movs, onBack, onMover, onBaja, onEliminar }) {
+  const [confirmDel, setConfirmDel] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const baja = equipo.condicion === "baja";
   const m = tipoMeta[equipo.ubicacion_tipo];
+
   return (
     <div className="flex-1 pb-28">
       <SubHeader title="Detalle del equipo" onBack={onBack} />
@@ -360,7 +422,7 @@ function DetailView({ equipo, movs, onBack, onMover }) {
             <div className="font-medium text-slate-800" style={{ fontSize: 16 }}>{equipo.nombre}</div>
             <div className="text-slate-400" style={{ fontSize: 12 }}>{equipo.serie} · {equipo.categoria}</div>
           </div>
-          <Pill tipo={equipo.ubicacion_tipo} />
+          <Pill equipo={equipo} />
         </div>
 
         <div className="bg-white rounded-xl border border-slate-200 p-4 mt-3">
@@ -376,9 +438,43 @@ function DetailView({ equipo, movs, onBack, onMover }) {
           </div>
         </div>
 
-        <button onClick={onMover} className="w-full rounded-xl font-medium flex items-center justify-center gap-2 mt-3" style={{ minHeight: 54, background: AMBER, color: NAVY, fontSize: 16 }}>
-          <ArrowLeftRight size={19} /> Mover equipo
-        </button>
+        {baja ? (
+          <div className="mt-3 rounded-xl p-3 flex items-center gap-2 bg-slate-200 text-slate-600" style={{ fontSize: 13 }}>
+            <AlertTriangle size={17} /> Este equipo está retirado (dado de baja).
+          </div>
+        ) : (
+          <button onClick={onMover} className="w-full rounded-xl font-medium flex items-center justify-center gap-2 mt-3" style={{ minHeight: 54, background: AMBER, color: NAVY, fontSize: 16 }}>
+            <ArrowLeftRight size={19} /> Mover equipo
+          </button>
+        )}
+
+        {!confirmDel ? (
+          <div className="grid grid-cols-2 gap-2 mt-2.5">
+            <button onClick={() => onBaja(equipo)}
+              className="rounded-xl border flex items-center justify-center gap-2"
+              style={{ minHeight: 48, fontSize: 14, borderColor: baja ? "#639922" : "#cbd5e1", color: baja ? "#3f6212" : "#475569", background: "#fff" }}>
+              {baja ? <><RotateCcw size={17} /> Reactivar</> : <><Ban size={17} /> Dar de baja</>}
+            </button>
+            <button onClick={() => setConfirmDel(true)}
+              className="rounded-xl border flex items-center justify-center gap-2 bg-white"
+              style={{ minHeight: 48, fontSize: 14, borderColor: "#fecaca", color: "#b91c1c" }}>
+              <Trash2 size={17} /> Eliminar
+            </button>
+          </div>
+        ) : (
+          <div className="mt-2.5 bg-white border border-red-200 rounded-xl p-3">
+            <div className="text-slate-700" style={{ fontSize: 13 }}>
+              ¿Eliminar <b>{equipo.nombre}</b> y todo su historial? Esta acción no se puede deshacer.
+            </div>
+            <div className="grid grid-cols-2 gap-2 mt-3">
+              <button onClick={() => setConfirmDel(false)} className="rounded-xl border border-slate-200 bg-white text-slate-600" style={{ minHeight: 46, fontSize: 14 }}>Cancelar</button>
+              <button disabled={busy} onClick={async () => { setBusy(true); await onEliminar(equipo); }}
+                className="rounded-xl font-medium flex items-center justify-center gap-2" style={{ minHeight: 46, fontSize: 14, background: "#dc2626", color: "#fff" }}>
+                {busy ? <Loader2 size={17} className="animate-spin" /> : <><Trash2 size={16} /> Sí, eliminar</>}
+              </button>
+            </div>
+          </div>
+        )}
 
         <div className="mt-5">
           <div className="text-slate-500 font-medium mb-2 px-1" style={{ fontSize: 15 }}>Historial de movimientos</div>
@@ -527,12 +623,13 @@ function NuevoView({ ubicaciones, onBack, onSave }) {
 }
 
 function ReportesView({ equipos, conteo }) {
+  const activos = equipos.filter((e) => e.condicion !== "baja");
   const porCat = useMemo(() => {
     const c = {};
-    equipos.forEach((e) => (c[e.categoria] = (c[e.categoria] || 0) + 1));
+    activos.forEach((e) => (c[e.categoria] = (c[e.categoria] || 0) + 1));
     return Object.entries(c).sort((a, b) => b[1] - a[1]);
   }, [equipos]);
-  const total = equipos.length;
+  const total = activos.length;
   const max = Math.max(...porCat.map(([, n]) => n), 1);
   return (
     <div className="flex-1 pb-28">
@@ -565,7 +662,7 @@ function ReportesView({ equipos, conteo }) {
             ))}
           </div>
         </div>
-        <div className="text-center text-slate-400 mt-4" style={{ fontSize: 11 }}>Total de equipos: {total}</div>
+        <div className="text-center text-slate-400 mt-4" style={{ fontSize: 11 }}>Equipos activos: {total}</div>
       </div>
     </div>
   );
@@ -589,8 +686,8 @@ function BottomNav({ view, setView }) {
           </span>
           <span style={{ fontSize: 11, color: "#9aa0ab" }}>Nuevo</span>
         </button>
-        {item("list", ArrowLeftRight, "Mover", false)}
-        {item("list", Boxes, "Equipos", false)}
+        {item("mover", ArrowLeftRight, "Mover", view === "mover")}
+        {item("equipos", Boxes, "Equipos", view === "equipos")}
       </div>
     </div>
   );
