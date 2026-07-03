@@ -78,9 +78,6 @@ function Login({ onLogin }) {
     else { setErr("PIN incorrecto"); setPin(""); }
   };
 
-  const supervisores = usuarios.filter((u) => u.rol === "supervisor");
-  const brigadas = usuarios.filter((u) => u.rol === "brigada");
-
   return (
     <div className="relative min-h-screen w-full flex items-center justify-center p-6"
       style={{ fontFamily: FONT, paddingTop: SAFE_TOP, backgroundImage: `url(${heroBg})`, backgroundSize: "cover", backgroundPosition: "center" }}>
@@ -98,13 +95,8 @@ function Login({ onLogin }) {
           {!cargando && !errCarga && !sel && (
             <>
               <div className="text-slate-500 mb-3" style={{ fontSize: 15 }}>¿Quién eres?</div>
-              {supervisores.length > 0 && <div className="text-slate-400 mb-1.5" style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: ".04em" }}>Supervisor</div>}
-              <div className="flex flex-col gap-2 mb-4">
-                {supervisores.map((u) => <UserRow key={u.id} u={u} onClick={() => { setSel(u); setErr(""); }} />)}
-              </div>
-              {brigadas.length > 0 && <div className="text-slate-400 mb-1.5" style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: ".04em" }}>Brigadas</div>}
               <div className="flex flex-col gap-2">
-                {brigadas.map((u) => <UserRow key={u.id} u={u} onClick={() => { setSel(u); setErr(""); }} />)}
+                {usuarios.map((u) => <UserRow key={u.id} u={u} onClick={() => { setSel(u); setErr(""); }} />)}
               </div>
             </>
           )}
@@ -147,7 +139,7 @@ function UserRow({ u, onClick }) {
       </div>
       <div className="flex-1">
         <div className="font-medium text-slate-800" style={{ fontSize: 15 }}>{u.nombre}</div>
-        <div className="text-slate-400" style={{ fontSize: 12 }}>{u.brigada || "Supervisor de almacén"}</div>
+        <div className="text-slate-400" style={{ fontSize: 12 }}>{u.brigada || "Usuario"}</div>
       </div>
       <ChevronRight size={18} className="text-slate-300" />
     </button>
@@ -169,14 +161,13 @@ function Main({ session, onLogout }) {
   const [movs, setMovs] = useState([]);
 
   const cargarDatos = useCallback(async () => {
-    const [eq, ub, us] = await Promise.all([
+    const [eq, ub] = await Promise.all([
       supabase.from("equipos").select("*").order("nombre"),
       supabase.from("ubicaciones").select("*").eq("activo", true).order("nombre"),
-      supabase.from("usuarios").select("brigada").eq("rol", "brigada").eq("activo", true),
     ]);
     setEquipos(eq.data || []);
     setUbicaciones(ub.data || []);
-    setBrigadas([...new Set((us.data || []).map((u) => u.brigada).filter(Boolean))]);
+    setBrigadas((ub.data || []).filter((u) => u.tipo === "brigada").map((u) => u.nombre));
     setCargando(false);
   }, []);
 
