@@ -2,11 +2,12 @@ import { useState, useEffect, useMemo, useCallback } from "react";
 import { supabase } from "./supabaseClient";
 import heroBg from "./assets/hero.png";
 import etsLogo from "./assets/ets-logo.png";
+import etsSimbolo from "./assets/ets-simbolo.png";
 import * as XLSX from "xlsx";
 import {
   Bell, CircleUser, Search, ChevronRight, ArrowLeft, Plus, LogOut,
   Home, Boxes, ArrowLeftRight, BarChart3, Check, ChevronDown, Loader2,
-  Ban, RotateCcw, Trash2, AlertTriangle, CheckCircle2, Circle, Upload,
+  Ban, RotateCcw, Trash2, AlertTriangle, CheckCircle2, Circle, Upload, Camera,
   Zap, Droplets, Cog, Flame, Hammer, Gauge, Wrench, Activity,
   Warehouse, HardHat, Truck,
 } from "lucide-react";
@@ -284,6 +285,30 @@ function Main({ session, onLogout }) {
     }
   };
 
+  const subirFoto = async (eq, file) => {
+    try {
+      const bmp = await createImageBitmap(file);
+      const max = 1200;
+      const esc = Math.min(1, max / Math.max(bmp.width, bmp.height));
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.round(bmp.width * esc);
+      canvas.height = Math.round(bmp.height * esc);
+      canvas.getContext("2d").drawImage(bmp, 0, 0, canvas.width, canvas.height);
+      const blob = await new Promise((res) => canvas.toBlob(res, "image/jpeg", 0.8));
+
+      const path = `${eq.id}.jpg`;
+      const { error } = await supabase.storage.from("fotos").upload(path, blob, { upsert: true, contentType: "image/jpeg" });
+      if (error) { alert("No se pudo subir la foto. Verifica el bucket 'fotos' en Supabase."); return; }
+      const { data } = supabase.storage.from("fotos").getPublicUrl(path);
+      const url = `${data.publicUrl}?t=${Date.now()}`;
+      await supabase.from("equipos").update({ foto_url: url, updated_at: new Date().toISOString() }).eq("id", eq.id);
+      await cargarDatos();
+      await openDetail(eq.id, detailBack);
+    } catch {
+      alert("No se pudo procesar la foto.");
+    }
+  };
+
   const darBaja = async (eq) => {
     const nueva = eq.condicion === "baja" ? "operativo" : "baja";
     await supabase.from("equipos").update({ condicion: nueva, updated_at: new Date().toISOString() }).eq("id", eq.id);
@@ -329,7 +354,7 @@ function Main({ session, onLogout }) {
           )}
           {view === "detail" && selected && (
             <DetailView equipo={selected} movs={movs} onBack={() => setView(detailBack)} isAdmin={session.rol === "admin"}
-              onMover={() => { setMoveBack("detail"); setView("move"); }} onBaja={darBaja} onEliminar={eliminar} />
+              onMover={() => { setMoveBack("detail"); setView("move"); }} onBaja={darBaja} onEliminar={eliminar} onFoto={subirFoto} />
           )}
           {view === "move" && selected && (
             <MoveView equipo={selected} ubicaciones={ubicaciones} brigadas={brigadas}
@@ -352,7 +377,10 @@ function Pill({ equipo }) {
   const m = tipoMeta[equipo.ubicacion_tipo];
   return <span className={`px-2.5 py-1 rounded-md whitespace-nowrap ${m.pill}`} style={{ fontSize: 12 }}>{m.label}</span>;
 }
-function CatTile({ cat, size = 44 }) {
+function CatTile({ cat, foto, size = 44 }) {
+  if (foto) {
+    return <img src={foto} alt="" className="rounded-lg shrink-0" style={{ width: size, height: size, objectFit: "cover" }} />;
+  }
   const Icon = catIcon[cat] || Wrench;
   return (
     <div className="rounded-lg flex items-center justify-center shrink-0" style={{ width: size, height: size, background: "#eef1f6", color: NAVY }}>
@@ -387,7 +415,9 @@ function ListView({ modo, equipos, conteo, filtro, setFiltro, query, setQuery, o
           {modo === "inicio" ? (
             <>
               <div className="flex items-center gap-3">
-                <div className="rounded-lg flex items-center justify-center font-medium text-sm" style={{ width: 40, height: 40, background: AMBER, color: NAVY }}>ETS</div>
+                <div className="rounded-lg flex items-center justify-center bg-white" style={{ width: 40, height: 40 }}>
+                  <img src={etsSimbolo} alt="ETS" style={{ width: 28, height: 28, objectFit: "contain" }} />
+                </div>
                 <div>
                   <div className="text-white font-medium leading-tight" style={{ fontSize: 17 }}>Control de equipos</div>
                   <div style={{ color: NAVY_SOFT, fontSize: 12 }}>{session.nombre} · {session.brigada || "Supervisor"}</div>
@@ -473,7 +503,7 @@ function ListView({ modo, equipos, conteo, filtro, setFiltro, query, setQuery, o
                   sel ? <CheckCircle2 size={23} className="shrink-0" style={{ color: NAVY }} />
                       : <Circle size={23} className="text-slate-300 shrink-0" />
                 )}
-                <CatTile cat={e.categoria} />
+                <CatTile cat={e.categoria} foto={e.foto_url} />
                 <div className="flex-1 min-w-0">
                   <div className="font-medium text-slate-800 truncate" style={{ fontSize: 15 }}>{e.nombre}</div>
                   <div className="text-slate-400 truncate" style={{ fontSize: 12 }}>{e.serie} · {e.ubicacion_detalle}</div>
@@ -511,9 +541,10 @@ function SubHeader({ title, onBack }) {
   );
 }
 
-function DetailView({ equipo, movs, onBack, onMover, onBaja, onEliminar, isAdmin }) {
+function DetailView({ equipo, movs, onBack, onMover, onBaja, onEliminar, isAdmin, onFoto }) {
   const [confirmDel, setConfirmDel] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [subiendo, setSubiendo] = useState(false);
   const baja = equipo.condicion === "baja";
   const m = tipoMeta[equipo.ubicacion_tipo];
 
@@ -522,12 +553,31 @@ function DetailView({ equipo, movs, onBack, onMover, onBaja, onEliminar, isAdmin
       <SubHeader title="Detalle del equipo" onBack={onBack} />
       <div className={`${WRAP} p-4`}>
         <div className="bg-white rounded-xl border border-slate-200 p-4 flex items-center gap-3">
-          <CatTile cat={equipo.categoria} size={54} />
+          <CatTile cat={equipo.categoria} foto={equipo.foto_url} size={54} />
           <div className="flex-1 min-w-0">
             <div className="font-medium text-slate-800" style={{ fontSize: 16 }}>{equipo.nombre}</div>
             <div className="text-slate-400" style={{ fontSize: 12 }}>{equipo.serie} · {equipo.categoria}</div>
           </div>
           <Pill equipo={equipo} />
+        </div>
+
+        <div className="bg-white rounded-xl border border-slate-200 p-4 mt-3">
+          <div className="flex items-center justify-between mb-2">
+            <div className="text-slate-400" style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: ".04em" }}>Foto</div>
+            <label className="flex items-center gap-1.5 text-slate-600 cursor-pointer border border-slate-200 rounded-lg px-3 py-1.5" style={{ fontSize: 13 }}>
+              {subiendo ? <Loader2 size={15} className="animate-spin" /> : <Camera size={15} />}
+              {equipo.foto_url ? "Cambiar foto" : "Tomar foto"}
+              <input type="file" accept="image/*" capture="environment" className="hidden"
+                onChange={async (e) => {
+                  const f = e.target.files?.[0];
+                  if (f) { setSubiendo(true); await onFoto(equipo, f); setSubiendo(false); }
+                  e.target.value = "";
+                }} />
+            </label>
+          </div>
+          {equipo.foto_url
+            ? <img src={equipo.foto_url} alt={equipo.nombre} className="w-full rounded-lg" style={{ maxHeight: 340, objectFit: "cover" }} />
+            : <div className="text-slate-400 text-sm">Sin foto todavía. Tómale una con la cámara del iPad.</div>}
         </div>
 
         <div className="bg-white rounded-xl border border-slate-200 p-4 mt-3">
@@ -653,7 +703,7 @@ function MoveView({ equipo, ubicaciones, brigadas, onBack, onConfirm }) {
       <SubHeader title="Mover equipo" onBack={onBack} />
       <div className={`${WRAP} p-4`}>
         <div className="bg-white rounded-xl border border-slate-200 p-3 flex items-center gap-3">
-          <CatTile cat={equipo.categoria} />
+          <CatTile cat={equipo.categoria} foto={equipo.foto_url} />
           <div className="min-w-0">
             <div className="font-medium text-slate-800 truncate" style={{ fontSize: 15 }}>{equipo.nombre}</div>
             <div className="text-slate-400" style={{ fontSize: 12 }}>Ahora: {tipoMeta[equipo.ubicacion_tipo].loc} — {equipo.ubicacion_detalle}</div>
@@ -793,7 +843,7 @@ function MultiMoveView({ equipos, ubicaciones, brigadas, onBack, onConfirm }) {
               return (
                 <div key={e.id} className="bg-white rounded-xl border border-slate-200 p-3">
                   <div className="flex items-center gap-3">
-                    <CatTile cat={e.categoria} />
+                    <CatTile cat={e.categoria} foto={e.foto_url} />
                     <div className="flex-1 min-w-0">
                       <div className="font-medium text-slate-800 truncate" style={{ fontSize: 15 }}>{e.nombre}</div>
                       <div className="text-slate-400" style={{ fontSize: 12 }}>Ahora: {tipoMeta[e.ubicacion_tipo].loc} — {e.ubicacion_detalle}</div>
