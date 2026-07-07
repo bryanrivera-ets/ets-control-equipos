@@ -2,10 +2,11 @@ import { useState, useEffect, useMemo, useCallback } from "react";
 import { supabase } from "./supabaseClient";
 import heroBg from "./assets/hero.png";
 import etsLogo from "./assets/ets-logo.png";
+import * as XLSX from "xlsx";
 import {
   Bell, CircleUser, Search, ChevronRight, ArrowLeft, Plus, LogOut,
   Home, Boxes, ArrowLeftRight, BarChart3, Check, ChevronDown, Loader2,
-  Ban, RotateCcw, Trash2, AlertTriangle,
+  Ban, RotateCcw, Trash2, AlertTriangle, CheckCircle2, Circle, Upload,
   Zap, Droplets, Cog, Flame, Hammer, Gauge, Wrench, Activity,
   Warehouse, HardHat, Truck,
 } from "lucide-react";
@@ -159,6 +160,56 @@ function Main({ session, onLogout }) {
   const [filtro, setFiltro] = useState("todos");
   const [query, setQuery] = useState("");
   const [movs, setMovs] = useState([]);
+  const [seleccion, setSeleccion] = useState([]);
+  const [importMsg, setImportMsg] = useState("");
+
+  const importarExcel = async (file) => {
+    setImportMsg("Importando…");
+    try {
+      const buf = await file.arrayBuffer();
+      const wb = XLSX.read(buf);
+      const hoja = wb.Sheets["Equipos"] || wb.Sheets[wb.SheetNames[0]];
+      const filas = XLSX.utils.sheet_to_json(hoja, { defval: "" });
+
+      const norm = (s) => String(s || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim().toLowerCase();
+      const tipoDe = (v) => {
+        const t = norm(v);
+        if (t.startsWith("proy")) return "proyecto";
+        if (t.startsWith("cami")) return "camion";
+        if (t.startsWith("tall")) return "taller";
+        return "almacen";
+      };
+      const col = (fila, ...nombres) => {
+        for (const k of Object.keys(fila)) if (nombres.includes(norm(k))) return String(fila[k]).trim();
+        return "";
+      };
+
+      let ok = 0, omitidas = 0;
+      for (const f of filas) {
+        const nombre = col(f, "nombre");
+        const serie = col(f, "numero de serie", "num de serie", "serie");
+        if (!nombre || !serie) { omitidas++; continue; }
+        const categoria = col(f, "categoria") || "Herramienta";
+        const tipo = tipoDe(col(f, "ubicacion"));
+        const detalle = col(f, "detalle") || (tipo === "almacen" ? "Almacén principal" : "");
+
+        const { data } = await supabase.from("equipos").insert({
+          nombre, serie, categoria, ubicacion_tipo: tipo, ubicacion_detalle: detalle,
+        }).select().single();
+        if (data) {
+          await supabase.from("movimientos").insert({
+            equipo_id: data.id, usuario_id: session.id, usuario_nombre: session.nombre,
+            a_tipo: tipo, a_detalle: detalle, nota: "Alta de equipo (importación Excel)",
+          });
+          ok++;
+        } else omitidas++;
+      }
+      await cargarDatos();
+      setImportMsg(`Importados ${ok} equipos.` + (omitidas ? ` ${omitidas} filas omitidas (sin nombre/serie o error).` : ""));
+    } catch (e) {
+      setImportMsg("No se pudo leer el archivo. Verifica que sea la plantilla de Excel.");
+    }
+  };
 
   const cargarDatos = useCallback(async () => {
     const [eq, ub] = await Promise.all([
@@ -179,7 +230,8 @@ function Main({ session, onLogout }) {
     setMovs(data || []);
   }, []);
 
-  const openMove = (id) => { setSelectedId(id); setDetailBack("list"); setMoveBack("mover"); setView("move"); };
+  const toggleSeleccion = (id) =>
+    setSeleccion((p) => (p.includes(id) ? p.filter((x) => x !== id) : [...p, id]));
 
   const selected = equipos.find((e) => e.id === selectedId);
 
@@ -201,6 +253,21 @@ function Main({ session, onLogout }) {
     });
     await cargarDatos();
     await openDetail(eq.id, detailBack || "list");
+  };
+
+  const moverVarias = async (asigs, nota) => {
+    for (const a of asigs) {
+      const eq = equipos.find((e) => e.id === a.id);
+      await supabase.from("equipos").update({
+        ubicacion_tipo: a.tipo, ubicacion_detalle: a.detalle, updated_at: new Date().toISOString(),
+      }).eq("id", a.id);
+      await supabase.from("movimientos").insert({
+        equipo_id: a.id, usuario_id: session.id, usuario_nombre: session.nombre,
+        de_tipo: eq.ubicacion_tipo, de_detalle: eq.ubicacion_detalle,
+        a_tipo: a.tipo, a_detalle: a.detalle, nota: nota || null,
+      });
+    }
+    await cargarDatos();
   };
 
   const agregar = async ({ nombre, serie, cat, detalle }) => {
@@ -247,14 +314,21 @@ function Main({ session, onLogout }) {
           )}
           {view === "equipos" && (
             <ListView modo="equipos" equipos={equipos} conteo={conteo} filtro={filtro} setFiltro={setFiltro}
-              query={query} setQuery={setQuery} onItem={(id) => openDetail(id, "equipos")} />
+              query={query} setQuery={setQuery} onItem={(id) => openDetail(id, "equipos")}
+              isAdmin={session.rol === "admin"} onImport={importarExcel} importMsg={importMsg} onCerrarMsg={() => setImportMsg("")} />
           )}
           {view === "mover" && (
             <ListView modo="mover" equipos={equipos} conteo={conteo} filtro={filtro} setFiltro={setFiltro}
-              query={query} setQuery={setQuery} onItem={(id) => openMove(id)} />
+              query={query} setQuery={setQuery} onItem={toggleSeleccion} seleccion={seleccion}
+              onContinuar={() => setView("movemulti")} />
+          )}
+          {view === "movemulti" && (
+            <MultiMoveView equipos={equipos.filter((e) => seleccion.includes(e.id))} ubicaciones={ubicaciones} brigadas={brigadas}
+              onBack={() => setView("mover")}
+              onConfirm={async (asigs, nota) => { await moverVarias(asigs, nota); setSeleccion([]); setView("list"); }} />
           )}
           {view === "detail" && selected && (
-            <DetailView equipo={selected} movs={movs} onBack={() => setView(detailBack)}
+            <DetailView equipo={selected} movs={movs} onBack={() => setView(detailBack)} isAdmin={session.rol === "admin"}
               onMover={() => { setMoveBack("detail"); setView("move"); }} onBaja={darBaja} onEliminar={eliminar} />
           )}
           {view === "move" && selected && (
@@ -287,7 +361,7 @@ function CatTile({ cat, size = 44 }) {
   );
 }
 
-function ListView({ modo, equipos, conteo, filtro, setFiltro, query, setQuery, onItem, session, onLogout }) {
+function ListView({ modo, equipos, conteo, filtro, setFiltro, query, setQuery, onItem, session, onLogout, seleccion = [], onContinuar, isAdmin, onImport, importMsg, onCerrarMsg }) {
   const cards = [["almacen", "Almacén"], ["proyecto", "Proyecto"], ["camion", "Camión"], ["taller", "Taller"]];
   const chips = [["todos", "Todos"], ["almacen", "Almacén"], ["proyecto", "Proyecto"], ["camion", "Camión"], ["taller", "Taller"]];
   if (modo === "equipos") chips.push(["retirados", "Retirados"]);
@@ -325,15 +399,35 @@ function ListView({ modo, equipos, conteo, filtro, setFiltro, query, setQuery, o
               </div>
             </>
           ) : (
-            <div>
-              <div className="text-white font-medium" style={{ fontSize: 18 }}>{modo === "equipos" ? "Equipos" : "Mover equipo"}</div>
-              <div style={{ color: NAVY_SOFT, fontSize: 12 }}>{modo === "equipos" ? "Inventario completo" : "Escoge la máquina que vas a mover"}</div>
+            <div className="flex items-center justify-between w-full">
+              <div>
+                <div className="text-white font-medium" style={{ fontSize: 18 }}>{modo === "equipos" ? "Equipos" : "Mover equipo"}</div>
+                <div style={{ color: NAVY_SOFT, fontSize: 12 }}>{modo === "equipos" ? "Inventario completo" : "Marca las máquinas que vas a mover"}</div>
+              </div>
+              {modo === "equipos" && isAdmin && (
+                <label className="flex items-center gap-2 rounded-lg px-3 cursor-pointer" style={{ background: AMBER, color: NAVY, minHeight: 42, fontSize: 14, fontWeight: 500 }}>
+                  <Upload size={17} /> Importar Excel
+                  <input type="file" accept=".xlsx,.xls" className="hidden"
+                    onChange={(e) => { const f = e.target.files?.[0]; if (f) onImport(f); e.target.value = ""; }} />
+                </label>
+              )}
             </div>
           )}
         </div>
       </div>
 
       <div className={WRAP}>
+        {modo === "equipos" && importMsg && (
+          <div className="px-4 mt-3">
+            <div className="bg-white border border-slate-200 rounded-xl p-3 flex items-center justify-between gap-3">
+              <div className="text-slate-700 flex items-center gap-2" style={{ fontSize: 13 }}>
+                {importMsg === "Importando…" ? <Loader2 size={16} className="animate-spin text-slate-400" /> : <CheckCircle2 size={16} style={{ color: "#639922" }} />}
+                {importMsg}
+              </div>
+              {importMsg !== "Importando…" && <button onClick={onCerrarMsg} className="text-slate-400" style={{ fontSize: 13 }}>Cerrar</button>}
+            </div>
+          </div>
+        )}
         {modo === "inicio" && (
           <div className="px-4 -mt-3">
             <div className="grid grid-cols-4 gap-2">
@@ -369,19 +463,39 @@ function ListView({ modo, equipos, conteo, filtro, setFiltro, query, setQuery, o
 
         <div className="px-4 mt-3 grid grid-cols-1 sm:grid-cols-2 gap-2.5">
           {visibles.length === 0 && <div className="text-center text-slate-400 text-sm py-10 sm:col-span-2">No hay equipos aquí.</div>}
-          {visibles.map((e) => (
-            <button key={e.id} onClick={() => onItem(e.id)} className="bg-white rounded-xl border border-slate-200 p-3 flex items-center gap-3 text-left" style={{ minHeight: 70 }}>
-              <CatTile cat={e.categoria} />
-              <div className="flex-1 min-w-0">
-                <div className="font-medium text-slate-800 truncate" style={{ fontSize: 15 }}>{e.nombre}</div>
-                <div className="text-slate-400 truncate" style={{ fontSize: 12 }}>{e.serie} · {e.ubicacion_detalle}</div>
-              </div>
-              <Pill equipo={e} />
-              <ChevronRight size={18} className="text-slate-300 shrink-0" />
-            </button>
-          ))}
+          {visibles.map((e) => {
+            const sel = modo === "mover" && seleccion.includes(e.id);
+            return (
+              <button key={e.id} onClick={() => onItem(e.id)}
+                className={`rounded-xl border p-3 flex items-center gap-3 text-left ${sel ? "bg-blue-50" : "bg-white"}`}
+                style={{ minHeight: 70, borderColor: sel ? NAVY : "#e2e8f0" }}>
+                {modo === "mover" && (
+                  sel ? <CheckCircle2 size={23} className="shrink-0" style={{ color: NAVY }} />
+                      : <Circle size={23} className="text-slate-300 shrink-0" />
+                )}
+                <CatTile cat={e.categoria} />
+                <div className="flex-1 min-w-0">
+                  <div className="font-medium text-slate-800 truncate" style={{ fontSize: 15 }}>{e.nombre}</div>
+                  <div className="text-slate-400 truncate" style={{ fontSize: 12 }}>{e.serie} · {e.ubicacion_detalle}</div>
+                </div>
+                <Pill equipo={e} />
+                {modo !== "mover" && <ChevronRight size={18} className="text-slate-300 shrink-0" />}
+              </button>
+            );
+          })}
         </div>
       </div>
+
+      {modo === "mover" && seleccion.length > 0 && (
+        <div className="fixed left-0 right-0" style={{ bottom: "calc(92px + env(safe-area-inset-bottom))", zIndex: 20 }}>
+          <div className={`${WRAP} px-4`}>
+            <button onClick={onContinuar} className="w-full rounded-xl font-medium flex items-center justify-center gap-2 shadow-lg"
+              style={{ minHeight: 54, background: AMBER, color: NAVY, fontSize: 16 }}>
+              <ArrowLeftRight size={19} /> Mover {seleccion.length} {seleccion.length === 1 ? "equipo" : "equipos"}
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -397,7 +511,7 @@ function SubHeader({ title, onBack }) {
   );
 }
 
-function DetailView({ equipo, movs, onBack, onMover, onBaja, onEliminar }) {
+function DetailView({ equipo, movs, onBack, onMover, onBaja, onEliminar, isAdmin }) {
   const [confirmDel, setConfirmDel] = useState(false);
   const [busy, setBusy] = useState(false);
   const baja = equipo.condicion === "baja";
@@ -440,17 +554,19 @@ function DetailView({ equipo, movs, onBack, onMover, onBaja, onEliminar }) {
         )}
 
         {!confirmDel ? (
-          <div className="grid grid-cols-2 gap-2 mt-2.5">
+          <div className={`grid ${isAdmin ? "grid-cols-2" : "grid-cols-1"} gap-2 mt-2.5`}>
             <button onClick={() => onBaja(equipo)}
               className="rounded-xl border flex items-center justify-center gap-2"
               style={{ minHeight: 48, fontSize: 14, borderColor: baja ? "#639922" : "#cbd5e1", color: baja ? "#3f6212" : "#475569", background: "#fff" }}>
               {baja ? <><RotateCcw size={17} /> Reactivar</> : <><Ban size={17} /> Dar de baja</>}
             </button>
-            <button onClick={() => setConfirmDel(true)}
-              className="rounded-xl border flex items-center justify-center gap-2 bg-white"
-              style={{ minHeight: 48, fontSize: 14, borderColor: "#fecaca", color: "#b91c1c" }}>
-              <Trash2 size={17} /> Eliminar
-            </button>
+            {isAdmin && (
+              <button onClick={() => setConfirmDel(true)}
+                className="rounded-xl border flex items-center justify-center gap-2 bg-white"
+                style={{ minHeight: 48, fontSize: 14, borderColor: "#fecaca", color: "#b91c1c" }}>
+                <Trash2 size={17} /> Eliminar
+              </button>
+            )}
           </div>
         ) : (
           <div className="mt-2.5 bg-white border border-red-200 rounded-xl p-3">
@@ -573,6 +689,149 @@ function MoveView({ equipo, ubicaciones, brigadas, onBack, onConfirm }) {
           className="w-full rounded-xl font-medium flex items-center justify-center gap-2 mt-4"
           style={{ minHeight: 54, background: listo ? AMBER : "#d8dbe1", color: listo ? NAVY : "#9aa0ab", fontSize: 16 }}>
           {guardando ? <Loader2 size={18} className="animate-spin" /> : <><Check size={19} /> Confirmar movimiento</>}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function MultiMoveView({ equipos, ubicaciones, brigadas, onBack, onConfirm }) {
+  const [modoDestino, setModoDestino] = useState("mismo"); // mismo | individual
+  const [asig, setAsig] = useState({});
+  const [uni, setUni] = useState({}); // destino único: {tipo, brigada, proyecto, camion, estante}
+  const [nota, setNota] = useState("");
+  const [guardando, setGuardando] = useState(false);
+
+  const opt = (t) => ubicaciones.filter((u) => u.tipo === t).map((u) => u.nombre);
+  const get = (id) => asig[id] || {};
+  const setA = (id, patch) => setAsig((p) => ({ ...p, [id]: { ...p[id], ...patch } }));
+
+  const detalleDe = (a) =>
+    a.tipo === "proyecto" ? (a.brigada && a.proyecto ? `${a.brigada} — ${a.proyecto}` : "")
+    : a.tipo === "camion" ? (a.camion || "")
+    : a.tipo === "almacen" ? (a.estante || "")
+    : a.tipo === "taller" ? "En taller"
+    : "";
+
+  const completo = (a) => a.tipo && (a.tipo === "taller" || detalleDe(a));
+  const listo = modoDestino === "mismo"
+    ? equipos.length > 0 && completo(uni)
+    : equipos.length > 0 && equipos.every((e) => completo(get(e.id)));
+
+  const opciones = [
+    { k: "almacen", t: "Almacén", Icon: Warehouse },
+    { k: "proyecto", t: "Proyecto", Icon: HardHat },
+    { k: "camion", t: "Camión", Icon: Truck },
+    { k: "taller", t: "Taller", Icon: Wrench },
+  ];
+  const tipos = [["", "Escoge ubicación"], ["almacen", "Almacén"], ["proyecto", "Proyecto"], ["camion", "Camión"], ["taller", "Taller"]];
+
+  const confirmar = async () => {
+    setGuardando(true);
+    const asigs = equipos.map((e) => {
+      const a = modoDestino === "mismo" ? uni : get(e.id);
+      return { id: e.id, tipo: a.tipo, detalle: a.tipo === "taller" ? (nota || "En taller") : detalleDe(a) };
+    });
+    await onConfirm(asigs, nota);
+  };
+
+  return (
+    <div className="flex-1 pb-28">
+      <SubHeader title={`Mover ${equipos.length} ${equipos.length === 1 ? "equipo" : "equipos"}`} onBack={onBack} />
+      <div className={`${WRAP} p-4`}>
+
+        <div className="grid grid-cols-2 gap-2">
+          <button onClick={() => setModoDestino("mismo")}
+            className={`rounded-xl border px-3 py-2.5 text-left ${modoDestino === "mismo" ? "border-transparent text-white" : "bg-white border-slate-200 text-slate-700"}`}
+            style={modoDestino === "mismo" ? { background: NAVY } : {}}>
+            <div className="font-medium" style={{ fontSize: 14 }}>Mismo destino</div>
+            <div style={{ fontSize: 11, opacity: 0.75 }}>Todas van al mismo sitio</div>
+          </button>
+          <button onClick={() => setModoDestino("individual")}
+            className={`rounded-xl border px-3 py-2.5 text-left ${modoDestino === "individual" ? "border-transparent text-white" : "bg-white border-slate-200 text-slate-700"}`}
+            style={modoDestino === "individual" ? { background: NAVY } : {}}>
+            <div className="font-medium" style={{ fontSize: 14 }}>Destino individual</div>
+            <div style={{ fontSize: 11, opacity: 0.75 }}>Cada una a su sitio</div>
+          </button>
+        </div>
+
+        {modoDestino === "mismo" && (
+          <>
+            <div className="bg-white rounded-xl border border-slate-200 p-3 mt-3">
+              <div className="text-slate-400 mb-2" style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: ".04em" }}>Se mueven ({equipos.length})</div>
+              <div className="flex flex-wrap gap-1.5">
+                {equipos.map((e) => (
+                  <span key={e.id} className="bg-slate-100 text-slate-600 rounded-md px-2 py-1" style={{ fontSize: 12 }}>{e.nombre}</span>
+                ))}
+              </div>
+            </div>
+
+            <div className="text-slate-500 mt-4 mb-2" style={{ fontSize: 13 }}>Destino de todas</div>
+            <div className="grid grid-cols-2 gap-2">
+              {opciones.map((o) => (
+                <button key={o.k} onClick={() => setUni({ tipo: o.k })}
+                  className={`rounded-xl border flex items-center gap-2 px-3 ${uni.tipo === o.k ? "border-transparent text-white" : "bg-white border-slate-200 text-slate-700"}`}
+                  style={{ minHeight: 52, ...(uni.tipo === o.k ? { background: NAVY } : {}) }}>
+                  <o.Icon size={19} /> <span style={{ fontSize: 15 }}>{o.t}</span>
+                </button>
+              ))}
+            </div>
+
+            {uni.tipo === "proyecto" && (<>
+              <Select label="Brigada responsable" value={uni.brigada || ""} onChange={(v) => setUni((p) => ({ ...p, brigada: v }))} options={brigadas} placeholder="Escoge brigada" />
+              <Select label="Proyecto" value={uni.proyecto || ""} onChange={(v) => setUni((p) => ({ ...p, proyecto: v }))} options={opt("proyecto")} placeholder="Escoge proyecto" />
+            </>)}
+            {uni.tipo === "camion" && <Select label="Camión" value={uni.camion || ""} onChange={(v) => setUni((p) => ({ ...p, camion: v }))} options={opt("camion")} placeholder="Escoge camión" />}
+            {uni.tipo === "almacen" && <Select label="Estante / zona" value={uni.estante || ""} onChange={(v) => setUni((p) => ({ ...p, estante: v }))} options={opt("almacen")} placeholder="Escoge ubicación" />}
+          </>
+        )}
+
+        {modoDestino === "individual" && (
+          <div className="flex flex-col gap-3 mt-3">
+            {equipos.map((e) => {
+              const a = get(e.id);
+              return (
+                <div key={e.id} className="bg-white rounded-xl border border-slate-200 p-3">
+                  <div className="flex items-center gap-3">
+                    <CatTile cat={e.categoria} />
+                    <div className="flex-1 min-w-0">
+                      <div className="font-medium text-slate-800 truncate" style={{ fontSize: 15 }}>{e.nombre}</div>
+                      <div className="text-slate-400" style={{ fontSize: 12 }}>Ahora: {tipoMeta[e.ubicacion_tipo].loc} — {e.ubicacion_detalle}</div>
+                    </div>
+                    {completo(a) && <CheckCircle2 size={20} style={{ color: "#639922" }} className="shrink-0" />}
+                  </div>
+
+                  <div className="relative mt-3">
+                    <select value={a.tipo || ""} onChange={(ev) => setA(e.id, { tipo: ev.target.value, brigada: "", proyecto: "", camion: "", estante: "" })}
+                      className="w-full appearance-none bg-white border border-slate-200 rounded-lg px-3 pr-9 text-slate-800" style={{ height: 48, fontSize: 16 }}>
+                      {tipos.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+                    </select>
+                    <ChevronDown size={18} className="text-slate-400 absolute right-3 pointer-events-none" style={{ top: 15 }} />
+                  </div>
+
+                  {a.tipo === "proyecto" && (<>
+                    <Select label="Brigada responsable" value={a.brigada || ""} onChange={(v) => setA(e.id, { brigada: v })} options={brigadas} placeholder="Escoge brigada" />
+                    <Select label="Proyecto" value={a.proyecto || ""} onChange={(v) => setA(e.id, { proyecto: v })} options={opt("proyecto")} placeholder="Escoge proyecto" />
+                  </>)}
+                  {a.tipo === "camion" && <Select label="Camión" value={a.camion || ""} onChange={(v) => setA(e.id, { camion: v })} options={opt("camion")} placeholder="Escoge camión" />}
+                  {a.tipo === "almacen" && <Select label="Estante / zona" value={a.estante || ""} onChange={(v) => setA(e.id, { estante: v })} options={opt("almacen")} placeholder="Escoge ubicación" />}
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        <div className="mt-4">
+          <div className="text-slate-500 mb-1.5" style={{ fontSize: 13 }}>Nota (opcional, se anota en todas)</div>
+          <textarea value={nota} onChange={(e) => setNota(e.target.value)} rows={2}
+            placeholder="Ej. salida para colado, devolución…"
+            className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-slate-800 outline-none resize-none" style={{ fontSize: 16 }} />
+        </div>
+
+        <button disabled={!listo || guardando} onClick={confirmar}
+          className="w-full rounded-xl font-medium flex items-center justify-center gap-2 mt-4"
+          style={{ minHeight: 54, background: listo ? AMBER : "#d8dbe1", color: listo ? NAVY : "#9aa0ab", fontSize: 16 }}>
+          {guardando ? <Loader2 size={18} className="animate-spin" /> : <><Check size={19} /> Confirmar movimientos</>}
         </button>
       </div>
     </div>
