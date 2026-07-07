@@ -7,7 +7,7 @@ import * as XLSX from "xlsx";
 import {
   Bell, CircleUser, Search, ChevronRight, ArrowLeft, Plus, LogOut,
   Home, Boxes, ArrowLeftRight, BarChart3, Check, ChevronDown, Loader2,
-  Ban, RotateCcw, Trash2, AlertTriangle, CheckCircle2, Circle, Upload, Camera,
+  Ban, RotateCcw, Trash2, AlertTriangle, CheckCircle2, Circle, Upload, Camera, Settings,
   Zap, Droplets, Cog, Flame, Hammer, Gauge, Wrench, Activity,
   Warehouse, HardHat, Truck,
 } from "lucide-react";
@@ -309,6 +309,16 @@ function Main({ session, onLogout }) {
     }
   };
 
+  const agregarUbicacion = async (tipo, nombre) => {
+    await supabase.from("ubicaciones").insert({ tipo, nombre });
+    await cargarDatos();
+  };
+
+  const eliminarUbicacion = async (id) => {
+    await supabase.from("ubicaciones").delete().eq("id", id);
+    await cargarDatos();
+  };
+
   const darBaja = async (eq) => {
     const nueva = eq.condicion === "baja" ? "operativo" : "baja";
     await supabase.from("equipos").update({ condicion: nueva, updated_at: new Date().toISOString() }).eq("id", eq.id);
@@ -335,7 +345,12 @@ function Main({ session, onLogout }) {
         <div className="flex-1 flex flex-col">
           {view === "list" && (
             <ListView modo="inicio" equipos={equipos} conteo={conteo} filtro={filtro} setFiltro={setFiltro}
-              query={query} setQuery={setQuery} onItem={(id) => openDetail(id, "list")} session={session} onLogout={onLogout} />
+              query={query} setQuery={setQuery} onItem={(id) => openDetail(id, "list")} session={session} onLogout={onLogout}
+              onAdmin={() => setView("admin")} />
+          )}
+          {view === "admin" && session.rol === "admin" && (
+            <AdminView ubicaciones={ubicaciones} onBack={() => setView("list")}
+              onAdd={agregarUbicacion} onDelete={eliminarUbicacion} />
           )}
           {view === "equipos" && (
             <ListView modo="equipos" equipos={equipos} conteo={conteo} filtro={filtro} setFiltro={setFiltro}
@@ -389,7 +404,7 @@ function CatTile({ cat, foto, size = 44 }) {
   );
 }
 
-function ListView({ modo, equipos, conteo, filtro, setFiltro, query, setQuery, onItem, session, onLogout, seleccion = [], onContinuar, isAdmin, onImport, importMsg, onCerrarMsg }) {
+function ListView({ modo, equipos, conteo, filtro, setFiltro, query, setQuery, onItem, session, onLogout, seleccion = [], onContinuar, isAdmin, onImport, importMsg, onCerrarMsg, onAdmin }) {
   const cards = [["almacen", "Almacén"], ["proyecto", "Proyecto"], ["camion", "Camión"], ["taller", "Taller"]];
   const chips = [["todos", "Todos"], ["almacen", "Almacén"], ["proyecto", "Proyecto"], ["camion", "Camión"], ["taller", "Taller"]];
   if (modo === "equipos") chips.push(["retirados", "Retirados"]);
@@ -424,6 +439,7 @@ function ListView({ modo, equipos, conteo, filtro, setFiltro, query, setQuery, o
                 </div>
               </div>
               <div className="flex gap-5 items-center" style={{ color: "#cdd6e4" }}>
+                {session.rol === "admin" && <button onClick={onAdmin} title="Administración"><Settings size={20} /></button>}
                 <Bell size={21} />
                 <button onClick={onLogout} title="Salir"><LogOut size={20} /></button>
               </div>
@@ -917,6 +933,89 @@ function NuevoView({ ubicaciones, onBack, onSave }) {
           style={{ minHeight: 54, background: listo ? AMBER : "#d8dbe1", color: listo ? NAVY : "#9aa0ab", fontSize: 16 }}>
           {guardando ? <Loader2 size={18} className="animate-spin" /> : <><Plus size={19} /> Guardar equipo</>}
         </button>
+      </div>
+    </div>
+  );
+}
+
+function AdminView({ ubicaciones, onBack, onAdd, onDelete }) {
+  const [tab, setTab] = useState("proyecto");
+  const [nuevo, setNuevo] = useState("");
+  const [delId, setDelId] = useState(null);
+  const [busy, setBusy] = useState(false);
+
+  const tabs = [["proyecto", "Proyectos"], ["brigada", "Brigadas"], ["camion", "Camiones"], ["almacen", "Estantes"]];
+  const items = ubicaciones.filter((u) => u.tipo === tab);
+  const nombreTab = tabs.find(([k]) => k === tab)[1];
+  const duplicado = items.some((i) => i.nombre.trim().toLowerCase() === nuevo.trim().toLowerCase());
+  const puedeAgregar = nuevo.trim() && !duplicado && !busy;
+
+  const agregar = async () => {
+    setBusy(true);
+    await onAdd(tab, nuevo.trim());
+    setNuevo(""); setBusy(false);
+  };
+
+  return (
+    <div className="flex-1 pb-28">
+      <SubHeader title="Administración" onBack={onBack} />
+      <div className={`${WRAP} p-4`}>
+
+        <div className="flex gap-2 overflow-x-auto pb-1">
+          {tabs.map(([k, l]) => (
+            <button key={k} onClick={() => { setTab(k); setNuevo(""); setDelId(null); }}
+              className={`px-3.5 py-2 rounded-full whitespace-nowrap border ${tab === k ? "text-white border-transparent" : "bg-white text-slate-600 border-slate-200"}`}
+              style={{ fontSize: 13, ...(tab === k ? { background: NAVY } : {}) }}>{l}</button>
+          ))}
+        </div>
+
+        <div className="bg-white rounded-xl border border-slate-200 p-3 mt-3">
+          <div className="text-slate-400 mb-2" style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: ".04em" }}>Añadir a {nombreTab}</div>
+          <div className="flex gap-2">
+            <input value={nuevo} onChange={(e) => setNuevo(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && puedeAgregar && agregar()}
+              placeholder={tab === "proyecto" ? "Ej. Plaza Caguas" : tab === "brigada" ? "Ej. Brigada E" : tab === "camion" ? "Ej. Camión 06" : "Ej. Estante D-01"}
+              className="flex-1 bg-white border border-slate-200 rounded-lg px-3 text-slate-800 outline-none" style={{ height: 48, fontSize: 16 }} />
+            <button disabled={!puedeAgregar} onClick={agregar}
+              className="rounded-lg font-medium flex items-center gap-1.5 px-4"
+              style={{ background: puedeAgregar ? AMBER : "#d8dbe1", color: puedeAgregar ? NAVY : "#9aa0ab", fontSize: 15 }}>
+              {busy ? <Loader2 size={17} className="animate-spin" /> : <><Plus size={18} /> Añadir</>}
+            </button>
+          </div>
+          {duplicado && <div className="text-red-600 mt-2" style={{ fontSize: 12 }}>Ya existe uno con ese nombre.</div>}
+        </div>
+
+        <div className="mt-3 flex flex-col gap-2">
+          {items.length === 0 && <div className="text-center text-slate-400 text-sm py-8">No hay {nombreTab.toLowerCase()} todavía.</div>}
+          {items.map((u) => (
+            <div key={u.id} className="bg-white rounded-xl border border-slate-200 p-3">
+              {delId === u.id ? (
+                <div>
+                  <div className="text-slate-700" style={{ fontSize: 13 }}>¿Eliminar <b>{u.nombre}</b> de la lista?</div>
+                  <div className="grid grid-cols-2 gap-2 mt-2.5">
+                    <button onClick={() => setDelId(null)} className="rounded-xl border border-slate-200 bg-white text-slate-600" style={{ minHeight: 44, fontSize: 14 }}>Cancelar</button>
+                    <button disabled={busy} onClick={async () => { setBusy(true); await onDelete(u.id); setDelId(null); setBusy(false); }}
+                      className="rounded-xl font-medium flex items-center justify-center gap-2" style={{ minHeight: 44, fontSize: 14, background: "#dc2626", color: "#fff" }}>
+                      {busy ? <Loader2 size={16} className="animate-spin" /> : <><Trash2 size={15} /> Eliminar</>}
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div className="flex items-center gap-3">
+                  <div className="flex-1 font-medium text-slate-800" style={{ fontSize: 15 }}>{u.nombre}</div>
+                  <button onClick={() => setDelId(u.id)} className="rounded-lg border flex items-center justify-center bg-white"
+                    style={{ width: 40, height: 40, borderColor: "#fecaca", color: "#b91c1c" }}>
+                    <Trash2 size={17} />
+                  </button>
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+
+        <div className="text-slate-400 mt-4 px-1" style={{ fontSize: 12 }}>
+          Nota: eliminar un lugar solo lo quita de los menús. Las máquinas que ya están ahí conservan su ubicación hasta que las muevas.
+        </div>
       </div>
     </div>
   );
