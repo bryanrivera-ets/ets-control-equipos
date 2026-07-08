@@ -7,7 +7,7 @@ import * as XLSX from "xlsx";
 import {
   Bell, CircleUser, Search, ChevronRight, ArrowLeft, Plus, LogOut,
   Home, Boxes, ArrowLeftRight, BarChart3, Check, ChevronDown, Loader2,
-  Ban, RotateCcw, Trash2, AlertTriangle, CheckCircle2, Circle, Upload, Camera, Settings,
+  Ban, RotateCcw, Trash2, AlertTriangle, CheckCircle2, Circle, Upload, Camera, Settings, Download, X,
   Zap, Droplets, Cog, Flame, Hammer, Gauge, Wrench, Activity,
   Warehouse, HardHat, Truck,
 } from "lucide-react";
@@ -43,6 +43,25 @@ const fmtFecha = (iso) => {
   );
 };
 const formatUbic = (tipo, detalle) => (tipo ? `${tipoMeta[tipo].loc} — ${detalle}` : "—");
+
+const diasEn = (iso) => (iso ? Math.max(0, Math.floor((Date.now() - new Date(iso)) / 86400000)) : null);
+const textoDias = (d) => (d === null ? "" : d === 0 ? "hoy" : d === 1 ? "1 día" : `${d} días`);
+const fechaCorta = (iso) => new Date(iso).toLocaleDateString("es-PR", { day: "2-digit", month: "short", year: "numeric" });
+
+const comprimirFoto = async (file, maxW = 1200, calidad = 0.8) => {
+  const bmp = await createImageBitmap(file);
+  const esc = Math.min(1, maxW / bmp.width);
+  const c = document.createElement("canvas");
+  c.width = Math.round(bmp.width * esc);
+  c.height = Math.round(bmp.height * esc);
+  c.getContext("2d").drawImage(bmp, 0, 0, c.width, c.height);
+  return new Promise((r) => c.toBlob(r, "image/jpeg", calidad));
+};
+
+const servicioVencido = (e) =>
+  e.ultimo_servicio && e.intervalo_servicio_dias
+    ? diasEn(e.ultimo_servicio) > e.intervalo_servicio_dias
+    : false;
 
 export default function App() {
   const [session, setSession] = useState(null);
@@ -242,33 +261,63 @@ function Main({ session, onLogout }) {
     return c;
   }, [equipos]);
 
-  const mover = async (tipo, detalle, nota) => {
+  const subirFotoMov = async (file) => {
+    try {
+      const blob = await comprimirFoto(file);
+      const path = `mov-${Date.now()}.jpg`;
+      const { error } = await supabase.storage.from("fotos").upload(path, blob, { contentType: "image/jpeg" });
+      if (error) return null;
+      return supabase.storage.from("fotos").getPublicUrl(path).data.publicUrl;
+    } catch { return null; }
+  };
+
+  const mover = async (tipo, detalle, nota, fotoFile) => {
     const eq = selected;
+    const fotoUrl = fotoFile ? await subirFotoMov(fotoFile) : null;
     await supabase.from("equipos").update({
-      ubicacion_tipo: tipo, ubicacion_detalle: detalle, updated_at: new Date().toISOString(),
+      ubicacion_tipo: tipo, ubicacion_detalle: detalle, ubicado_desde: new Date().toISOString(), updated_at: new Date().toISOString(),
     }).eq("id", eq.id);
     await supabase.from("movimientos").insert({
       equipo_id: eq.id, usuario_id: session.id, usuario_nombre: session.nombre,
       de_tipo: eq.ubicacion_tipo, de_detalle: eq.ubicacion_detalle,
-      a_tipo: tipo, a_detalle: detalle, nota: nota || null,
+      a_tipo: tipo, a_detalle: detalle, nota: nota || null, foto_url: fotoUrl,
     });
     await cargarDatos();
     await openDetail(eq.id, detailBack || "list");
   };
 
-  const moverVarias = async (asigs, nota) => {
+  const moverVarias = async (asigs, nota, fotoFile) => {
+    const fotoUrl = fotoFile ? await subirFotoMov(fotoFile) : null;
     for (const a of asigs) {
       const eq = equipos.find((e) => e.id === a.id);
       await supabase.from("equipos").update({
-        ubicacion_tipo: a.tipo, ubicacion_detalle: a.detalle, updated_at: new Date().toISOString(),
+        ubicacion_tipo: a.tipo, ubicacion_detalle: a.detalle, ubicado_desde: new Date().toISOString(), updated_at: new Date().toISOString(),
       }).eq("id", a.id);
       await supabase.from("movimientos").insert({
         equipo_id: a.id, usuario_id: session.id, usuario_nombre: session.nombre,
         de_tipo: eq.ubicacion_tipo, de_detalle: eq.ubicacion_detalle,
-        a_tipo: a.tipo, a_detalle: a.detalle, nota: nota || null,
+        a_tipo: a.tipo, a_detalle: a.detalle, nota: nota || null, foto_url: fotoUrl,
       });
     }
     await cargarDatos();
+  };
+
+  const registrarServicio = async (eq) => {
+    await supabase.from("equipos").update({
+      ultimo_servicio: new Date().toISOString().slice(0, 10), updated_at: new Date().toISOString(),
+    }).eq("id", eq.id);
+    await supabase.from("movimientos").insert({
+      equipo_id: eq.id, usuario_id: session.id, usuario_nombre: session.nombre,
+      a_tipo: eq.ubicacion_tipo, a_detalle: eq.ubicacion_detalle, nota: "Servicio de mantenimiento realizado",
+    });
+    await cargarDatos();
+    await openDetail(eq.id, detailBack);
+  };
+
+  const cambiarIntervalo = async (eq, dias) => {
+    await supabase.from("equipos").update({ intervalo_servicio_dias: dias, updated_at: new Date().toISOString() }).eq("id", eq.id);
+    await cargarDatos();
+    await openDetail(eq.id, detailBack);
   };
 
   const agregar = async ({ nombre, serie, cat, detalle }) => {
@@ -365,15 +414,16 @@ function Main({ session, onLogout }) {
           {view === "movemulti" && (
             <MultiMoveView equipos={equipos.filter((e) => seleccion.includes(e.id))} ubicaciones={ubicaciones} brigadas={brigadas}
               onBack={() => setView("mover")}
-              onConfirm={async (asigs, nota) => { await moverVarias(asigs, nota); setSeleccion([]); setView("list"); }} />
+              onConfirm={async (asigs, nota, foto) => { await moverVarias(asigs, nota, foto); setSeleccion([]); setView("list"); }} />
           )}
           {view === "detail" && selected && (
             <DetailView equipo={selected} movs={movs} onBack={() => setView(detailBack)} isAdmin={session.rol === "admin"}
-              onMover={() => { setMoveBack("detail"); setView("move"); }} onBaja={darBaja} onEliminar={eliminar} onFoto={subirFoto} />
+              onMover={() => { setMoveBack("detail"); setView("move"); }} onBaja={darBaja} onEliminar={eliminar} onFoto={subirFoto}
+              onServicio={registrarServicio} onIntervalo={cambiarIntervalo} />
           )}
           {view === "move" && selected && (
             <MoveView equipo={selected} ubicaciones={ubicaciones} brigadas={brigadas}
-              onBack={() => setView(moveBack)} onConfirm={async (t, d, n) => { await mover(t, d, n); }} />
+              onBack={() => setView(moveBack)} onConfirm={async (t, d, n, f) => { await mover(t, d, n, f); }} />
           )}
           {view === "nuevo" && (
             <NuevoView ubicaciones={ubicaciones} onBack={() => setView("list")} onSave={async (eq) => { await agregar(eq); }} />
@@ -522,8 +572,12 @@ function ListView({ modo, equipos, conteo, filtro, setFiltro, query, setQuery, o
                 <CatTile cat={e.categoria} foto={e.foto_url} />
                 <div className="flex-1 min-w-0">
                   <div className="font-medium text-slate-800 truncate" style={{ fontSize: 15 }}>{e.nombre}</div>
-                  <div className="text-slate-400 truncate" style={{ fontSize: 12 }}>{e.serie} · {e.ubicacion_detalle}</div>
+                  <div className="text-slate-400 truncate" style={{ fontSize: 12 }}>
+                    {e.serie} · {e.ubicacion_detalle}
+                    {e.ubicacion_tipo !== "almacen" && e.condicion !== "baja" && e.ubicado_desde ? ` · ${textoDias(diasEn(e.ubicado_desde))} aquí` : ""}
+                  </div>
                 </div>
+                {servicioVencido(e) && e.condicion !== "baja" && <Wrench size={15} className="shrink-0" style={{ color: "#dc2626" }} />}
                 <Pill equipo={e} />
                 {modo !== "mover" && <ChevronRight size={18} className="text-slate-300 shrink-0" />}
               </button>
@@ -557,7 +611,8 @@ function SubHeader({ title, onBack }) {
   );
 }
 
-function DetailView({ equipo, movs, onBack, onMover, onBaja, onEliminar, isAdmin, onFoto }) {
+function DetailView({ equipo, movs, onBack, onMover, onBaja, onEliminar, isAdmin, onFoto, onServicio, onIntervalo }) {
+  const [servBusy, setServBusy] = useState(false);
   const [confirmDel, setConfirmDel] = useState(false);
   const [busy, setBusy] = useState(false);
   const [subiendo, setSubiendo] = useState(false);
@@ -605,7 +660,51 @@ function DetailView({ equipo, movs, onBack, onMover, onBaja, onEliminar, isAdmin
             <div>
               <div className="font-medium text-slate-800" style={{ fontSize: 15 }}>{m.loc}</div>
               <div className="text-slate-500" style={{ fontSize: 13 }}>{equipo.ubicacion_detalle}</div>
+              {equipo.ubicado_desde && (
+                <div className="text-slate-400" style={{ fontSize: 12 }}>
+                  Aquí desde el {new Date(equipo.ubicado_desde).toLocaleDateString("es-PR", { day: "2-digit", month: "short", year: "numeric" })} ({textoDias(diasEn(equipo.ubicado_desde))})
+                </div>
+              )}
             </div>
+          </div>
+        </div>
+
+        <div className="bg-white rounded-xl border border-slate-200 p-4 mt-3">
+          <div className="flex items-center justify-between mb-2">
+            <div className="text-slate-400" style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: ".04em" }}>Mantenimiento</div>
+            {servicioVencido(equipo)
+              ? <span className="px-2 py-0.5 rounded-md bg-red-100 text-red-800" style={{ fontSize: 11 }}>Servicio vencido</span>
+              : equipo.ultimo_servicio && equipo.intervalo_servicio_dias
+                ? <span className="px-2 py-0.5 rounded-md bg-green-100 text-green-800" style={{ fontSize: 11 }}>Al día</span>
+                : null}
+          </div>
+          <div className="text-slate-700" style={{ fontSize: 14 }}>
+            {equipo.ultimo_servicio
+              ? <>Último servicio: {fechaCorta(equipo.ultimo_servicio)} (hace {textoDias(diasEn(equipo.ultimo_servicio))})</>
+              : "Sin servicio registrado."}
+          </div>
+          {equipo.ultimo_servicio && equipo.intervalo_servicio_dias && (
+            <div className="text-slate-500 mt-0.5" style={{ fontSize: 13 }}>
+              Próximo: {fechaCorta(new Date(new Date(equipo.ultimo_servicio).getTime() + equipo.intervalo_servicio_dias * 86400000))}
+            </div>
+          )}
+          <div className="grid grid-cols-2 gap-2 mt-3">
+            <div className="relative">
+              <select value={equipo.intervalo_servicio_dias || ""} onChange={(e) => onIntervalo(equipo, e.target.value ? Number(e.target.value) : null)}
+                className="w-full appearance-none bg-white border border-slate-200 rounded-xl px-3 pr-8 text-slate-600" style={{ height: 48, fontSize: 13 }}>
+                <option value="">Sin recordatorio</option>
+                <option value="30">Cada 30 días</option>
+                <option value="60">Cada 60 días</option>
+                <option value="90">Cada 90 días</option>
+                <option value="180">Cada 6 meses</option>
+                <option value="365">Cada año</option>
+              </select>
+              <ChevronDown size={16} className="text-slate-400 absolute right-2.5 pointer-events-none" style={{ top: 16 }} />
+            </div>
+            <button disabled={servBusy} onClick={async () => { setServBusy(true); await onServicio(equipo); setServBusy(false); }}
+              className="rounded-xl border border-slate-200 bg-white flex items-center justify-center gap-2 text-slate-700" style={{ minHeight: 48, fontSize: 13 }}>
+              {servBusy ? <Loader2 size={16} className="animate-spin" /> : <><Wrench size={16} /> Registrar servicio</>}
+            </button>
           </div>
         </div>
 
@@ -661,6 +760,7 @@ function DetailView({ equipo, movs, onBack, onMover, onBaja, onEliminar, isAdmin
                   <span className="font-medium">{formatUbic(mv.a_tipo, mv.a_detalle)}</span>
                 </div>
                 {mv.nota && <div className="text-slate-500 mt-1" style={{ fontSize: 13 }}>{mv.nota}</div>}
+                {mv.foto_url && <img src={mv.foto_url} alt="Condición" className="w-full rounded-lg object-cover mt-2" style={{ maxHeight: 160 }} />}
                 <div className="text-slate-400 mt-1.5 flex items-center gap-1.5" style={{ fontSize: 11 }}>
                   <CircleUser size={13} /> {mv.usuario_nombre || "—"} · {fmtFecha(mv.created_at)}
                 </div>
@@ -696,6 +796,8 @@ function MoveView({ equipo, ubicaciones, brigadas, onBack, onConfirm }) {
   const [camion, setCamion] = useState("");
   const [estante, setEstante] = useState("");
   const [nota, setNota] = useState("");
+  const [foto, setFoto] = useState(null);
+  const [fotoPrev, setFotoPrev] = useState("");
   const [guardando, setGuardando] = useState(false);
 
   const opt = (t) => ubicaciones.filter((u) => u.tipo === t).map((u) => u.nombre);
@@ -751,7 +853,25 @@ function MoveView({ equipo, ubicaciones, brigadas, onBack, onConfirm }) {
             className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-slate-800 outline-none resize-none" style={{ fontSize: 16 }} />
         </div>
 
-        <button disabled={!listo || guardando} onClick={async () => { setGuardando(true); await onConfirm(tipo, detalle, nota); }}
+        <div className="mt-3">
+          <div className="text-slate-500 mb-1.5" style={{ fontSize: 13 }}>Foto de condición (opcional)</div>
+          {fotoPrev ? (
+            <div className="relative">
+              <img src={fotoPrev} alt="Condición" className="w-full rounded-lg object-cover" style={{ maxHeight: 180 }} />
+              <button onClick={() => { setFoto(null); setFotoPrev(""); }}
+                className="absolute top-2 right-2 rounded-full bg-white border border-slate-200 flex items-center justify-center"
+                style={{ width: 32, height: 32, color: "#475569" }}><X size={16} /></button>
+            </div>
+          ) : (
+            <label className="flex items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white cursor-pointer text-slate-600" style={{ minHeight: 48, fontSize: 14 }}>
+              <Camera size={17} /> Tomar foto
+              <input type="file" accept="image/*" capture="environment" className="hidden"
+                onChange={(e) => { const f = e.target.files?.[0]; if (f) { setFoto(f); setFotoPrev(URL.createObjectURL(f)); } e.target.value = ""; }} />
+            </label>
+          )}
+        </div>
+
+        <button disabled={!listo || guardando} onClick={async () => { setGuardando(true); await onConfirm(tipo, detalle, nota, foto); }}
           className="w-full rounded-xl font-medium flex items-center justify-center gap-2 mt-4"
           style={{ minHeight: 54, background: listo ? AMBER : "#d8dbe1", color: listo ? NAVY : "#9aa0ab", fontSize: 16 }}>
           {guardando ? <Loader2 size={18} className="animate-spin" /> : <><Check size={19} /> Confirmar movimiento</>}
@@ -766,6 +886,8 @@ function MultiMoveView({ equipos, ubicaciones, brigadas, onBack, onConfirm }) {
   const [asig, setAsig] = useState({});
   const [uni, setUni] = useState({}); // destino único: {tipo, brigada, proyecto, camion, estante}
   const [nota, setNota] = useState("");
+  const [foto, setFoto] = useState(null);
+  const [fotoPrev, setFotoPrev] = useState("");
   const [guardando, setGuardando] = useState(false);
 
   const opt = (t) => ubicaciones.filter((u) => u.tipo === t).map((u) => u.nombre);
@@ -798,7 +920,7 @@ function MultiMoveView({ equipos, ubicaciones, brigadas, onBack, onConfirm }) {
       const a = modoDestino === "mismo" ? uni : get(e.id);
       return { id: e.id, tipo: a.tipo, detalle: a.tipo === "taller" ? (nota || "En taller") : detalleDe(a) };
     });
-    await onConfirm(asigs, nota);
+    await onConfirm(asigs, nota, foto);
   };
 
   return (
@@ -892,6 +1014,24 @@ function MultiMoveView({ equipos, ubicaciones, brigadas, onBack, onConfirm }) {
           <textarea value={nota} onChange={(e) => setNota(e.target.value)} rows={2}
             placeholder="Ej. salida para colado, devolución…"
             className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-slate-800 outline-none resize-none" style={{ fontSize: 16 }} />
+        </div>
+
+        <div className="mt-3">
+          <div className="text-slate-500 mb-1.5" style={{ fontSize: 13 }}>Foto de condición (opcional, se adjunta a todas)</div>
+          {fotoPrev ? (
+            <div className="relative">
+              <img src={fotoPrev} alt="Condición" className="w-full rounded-lg object-cover" style={{ maxHeight: 180 }} />
+              <button onClick={() => { setFoto(null); setFotoPrev(""); }}
+                className="absolute top-2 right-2 rounded-full bg-white border border-slate-200 flex items-center justify-center"
+                style={{ width: 32, height: 32, color: "#475569" }}><X size={16} /></button>
+            </div>
+          ) : (
+            <label className="flex items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white cursor-pointer text-slate-600" style={{ minHeight: 48, fontSize: 14 }}>
+              <Camera size={17} /> Tomar foto
+              <input type="file" accept="image/*" capture="environment" className="hidden"
+                onChange={(e) => { const f = e.target.files?.[0]; if (f) { setFoto(f); setFotoPrev(URL.createObjectURL(f)); } e.target.value = ""; }} />
+            </label>
+          )}
         </div>
 
         <button disabled={!listo || guardando} onClick={confirmar}
@@ -1022,6 +1162,21 @@ function AdminView({ ubicaciones, onBack, onAdd, onDelete }) {
 }
 
 function ReportesView({ equipos, conteo }) {
+  const [tab, setTab] = useState("resumen");
+  const [acts, setActs] = useState(null);
+  const [exportando, setExportando] = useState(false);
+
+  useEffect(() => {
+    if (tab === "actividad" && acts === null) {
+      (async () => {
+        const { data } = await supabase.from("movimientos").select("*").order("created_at", { ascending: false }).limit(100);
+        setActs(data || []);
+      })();
+    }
+  }, [tab, acts]);
+
+  const nombreEq = (id) => equipos.find((e) => e.id === id)?.nombre || "(equipo eliminado)";
+
   const activos = equipos.filter((e) => e.condicion !== "baja");
   const porCat = useMemo(() => {
     const c = {};
@@ -1030,38 +1185,129 @@ function ReportesView({ equipos, conteo }) {
   }, [equipos]);
   const total = activos.length;
   const max = Math.max(...porCat.map(([, n]) => n), 1);
+  const hoy = () => new Date().toISOString().slice(0, 10);
+
+  const exportInventario = () => {
+    const rows = equipos.map((e) => ({
+      "Nombre": e.nombre,
+      "Numero de Serie": e.serie,
+      "Categoria": e.categoria || "",
+      "Ubicacion": tipoMeta[e.ubicacion_tipo]?.loc || "",
+      "Detalle": e.ubicacion_detalle || "",
+      "Estado": e.condicion === "baja" ? "Retirado" : (tipoMeta[e.ubicacion_tipo]?.label || ""),
+      "En ubicacion desde": e.ubicado_desde ? new Date(e.ubicado_desde).toLocaleDateString("es-PR") : "",
+      "Dias en ubicacion": e.ubicado_desde ? diasEn(e.ubicado_desde) : "",
+      "Ultimo servicio": e.ultimo_servicio ? new Date(e.ultimo_servicio).toLocaleDateString("es-PR") : "",
+      "Servicio vencido": servicioVencido(e) ? "SI" : "",
+    }));
+    const ws = XLSX.utils.json_to_sheet(rows);
+    ws["!cols"] = [{ wch: 30 }, { wch: 16 }, { wch: 14 }, { wch: 12 }, { wch: 28 }, { wch: 12 }, { wch: 16 }, { wch: 14 }];
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Inventario");
+    XLSX.writeFile(wb, `ETS_Inventario_${hoy()}.xlsx`);
+  };
+
+  const exportHistorial = async () => {
+    setExportando(true);
+    const { data } = await supabase.from("movimientos").select("*").order("created_at", { ascending: false }).limit(2000);
+    const rows = (data || []).map((m) => ({
+      "Fecha": fmtFecha(m.created_at),
+      "Equipo": nombreEq(m.equipo_id),
+      "De": formatUbic(m.de_tipo, m.de_detalle),
+      "A": formatUbic(m.a_tipo, m.a_detalle),
+      "Usuario": m.usuario_nombre || "",
+      "Nota": m.nota || "",
+    }));
+    const ws = XLSX.utils.json_to_sheet(rows);
+    ws["!cols"] = [{ wch: 20 }, { wch: 30 }, { wch: 30 }, { wch: 30 }, { wch: 16 }, { wch: 30 }];
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Historial");
+    XLSX.writeFile(wb, `ETS_Historial_${hoy()}.xlsx`);
+    setExportando(false);
+  };
+
   return (
     <div className="flex-1 pb-28">
       <SubHeader title="Reportes" />
       <div className={`${WRAP} p-4`}>
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-          {Object.keys(tipoMeta).map((k) => (
-            <div key={k} className="bg-white rounded-xl border border-slate-200 p-3">
-              <div className="flex items-center gap-1.5">
-                <span className="rounded-full" style={{ width: 8, height: 8, background: tipoMeta[k].dot }} />
-                <span className="text-slate-500 text-sm">{tipoMeta[k].loc}</span>
-              </div>
-              <div className="font-medium mt-1" style={{ color: NAVY, fontSize: 24 }}>{conteo[k]}</div>
-              <div className="text-slate-400" style={{ fontSize: 11 }}>{total ? Math.round((conteo[k] / total) * 100) : 0}% de la flota</div>
-            </div>
+
+        <div className="flex gap-2 pb-1">
+          {[["resumen", "Resumen"], ["actividad", "Actividad reciente"]].map(([k, l]) => (
+            <button key={k} onClick={() => setTab(k)}
+              className={`px-3.5 py-2 rounded-full whitespace-nowrap border ${tab === k ? "text-white border-transparent" : "bg-white text-slate-600 border-slate-200"}`}
+              style={{ fontSize: 13, ...(tab === k ? { background: NAVY } : {}) }}>{l}</button>
           ))}
         </div>
-        <div className="bg-white rounded-xl border border-slate-200 p-4 mt-3">
-          <div className="text-slate-500 font-medium mb-3" style={{ fontSize: 15 }}>Equipos por categoría</div>
-          <div className="flex flex-col gap-2.5">
-            {porCat.map(([cat, n]) => (
-              <div key={cat}>
-                <div className="flex justify-between text-slate-700" style={{ fontSize: 14 }}>
-                  <span>{cat}</span><span className="text-slate-400">{n}</span>
+
+        {tab === "resumen" && (
+          <>
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mt-3">
+              {Object.keys(tipoMeta).map((k) => (
+                <div key={k} className="bg-white rounded-xl border border-slate-200 p-3">
+                  <div className="flex items-center gap-1.5">
+                    <span className="rounded-full" style={{ width: 8, height: 8, background: tipoMeta[k].dot }} />
+                    <span className="text-slate-500 text-sm">{tipoMeta[k].loc}</span>
+                  </div>
+                  <div className="font-medium mt-1" style={{ color: NAVY, fontSize: 24 }}>{conteo[k]}</div>
+                  <div className="text-slate-400" style={{ fontSize: 11 }}>{total ? Math.round((conteo[k] / total) * 100) : 0}% de la flota</div>
                 </div>
-                <div className="bg-slate-100 rounded-full mt-1" style={{ height: 8 }}>
-                  <div className="rounded-full" style={{ height: 8, width: `${(n / max) * 100}%`, background: NAVY }} />
+              ))}
+            </div>
+
+            <div className="bg-white rounded-xl border border-slate-200 p-4 mt-3">
+              <div className="text-slate-500 font-medium mb-3" style={{ fontSize: 15 }}>Equipos por categoría</div>
+              <div className="flex flex-col gap-2.5">
+                {porCat.map(([cat, n]) => (
+                  <div key={cat}>
+                    <div className="flex justify-between text-slate-700" style={{ fontSize: 14 }}>
+                      <span>{cat}</span><span className="text-slate-400">{n}</span>
+                    </div>
+                    <div className="bg-slate-100 rounded-full mt-1" style={{ height: 8 }}>
+                      <div className="rounded-full" style={{ height: 8, width: `${(n / max) * 100}%`, background: NAVY }} />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mt-3">
+              <button onClick={exportInventario}
+                className="rounded-xl border border-slate-200 bg-white flex items-center justify-center gap-2 text-slate-700"
+                style={{ minHeight: 50, fontSize: 14 }}>
+                <Download size={17} /> Exportar inventario (Excel)
+              </button>
+              <button onClick={exportHistorial} disabled={exportando}
+                className="rounded-xl border border-slate-200 bg-white flex items-center justify-center gap-2 text-slate-700"
+                style={{ minHeight: 50, fontSize: 14 }}>
+                {exportando ? <Loader2 size={17} className="animate-spin" /> : <><Download size={17} /> Exportar historial (Excel)</>}
+              </button>
+            </div>
+
+            <div className="text-center text-slate-400 mt-4" style={{ fontSize: 11 }}>Equipos activos: {total}</div>
+          </>
+        )}
+
+        {tab === "actividad" && (
+          <div className="mt-3 flex flex-col gap-2.5">
+            {acts === null && <div className="flex justify-center py-8 text-slate-400"><Loader2 className="animate-spin" /></div>}
+            {acts !== null && acts.length === 0 && <div className="text-center text-slate-400 text-sm py-8">Sin movimientos todavía.</div>}
+            {(acts || []).map((mv) => (
+              <div key={mv.id} className="bg-white rounded-xl border border-slate-200 p-3">
+                <div className="font-medium text-slate-800" style={{ fontSize: 14 }}>{nombreEq(mv.equipo_id)}</div>
+                <div className="flex items-center gap-2 text-slate-700 mt-1" style={{ fontSize: 13 }}>
+                  <span className="text-slate-400">{formatUbic(mv.de_tipo, mv.de_detalle)}</span>
+                  <ArrowLeftRight size={14} className="text-slate-300 shrink-0" />
+                  <span className="font-medium">{formatUbic(mv.a_tipo, mv.a_detalle)}</span>
+                </div>
+                {mv.nota && <div className="text-slate-500 mt-1" style={{ fontSize: 13 }}>{mv.nota}</div>}
+                {mv.foto_url && <img src={mv.foto_url} alt="Condición" className="w-full rounded-lg object-cover mt-2" style={{ maxHeight: 160 }} />}
+                <div className="text-slate-400 mt-1.5 flex items-center gap-1.5" style={{ fontSize: 11 }}>
+                  <CircleUser size={13} /> {mv.usuario_nombre || "—"} · {fmtFecha(mv.created_at)}
                 </div>
               </div>
             ))}
           </div>
-        </div>
-        <div className="text-center text-slate-400 mt-4" style={{ fontSize: 11 }}>Equipos activos: {total}</div>
+        )}
       </div>
     </div>
   );
