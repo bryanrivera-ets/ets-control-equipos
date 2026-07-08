@@ -5,11 +5,11 @@ import etsLogo from "./assets/ets-logo.png";
 import etsSimbolo from "./assets/ets-simbolo.png";
 import * as XLSX from "xlsx";
 import {
-  Bell, CircleUser, Search, ChevronRight, ArrowLeft, Plus, LogOut,
+  CircleUser, Search, ChevronRight, ArrowLeft, Plus, LogOut,
   Home, Boxes, ArrowLeftRight, BarChart3, Check, ChevronDown, Loader2,
   Ban, RotateCcw, Trash2, AlertTriangle, CheckCircle2, Circle, Upload, Camera, Settings, Download, X,
   Zap, Droplets, Cog, Flame, Hammer, Gauge, Wrench, Activity,
-  Warehouse, HardHat, Truck,
+  Warehouse, HardHat, Truck, Car,
 } from "lucide-react";
 
 const NAVY = "#16233a";
@@ -46,7 +46,10 @@ const formatUbic = (tipo, detalle) => (tipo ? `${tipoMeta[tipo].loc} — ${detal
 
 const diasEn = (iso) => (iso ? Math.max(0, Math.floor((Date.now() - new Date(iso)) / 86400000)) : null);
 const textoDias = (d) => (d === null ? "" : d === 0 ? "hoy" : d === 1 ? "1 día" : `${d} días`);
-const fechaCorta = (iso) => new Date(iso).toLocaleDateString("es-PR", { day: "2-digit", month: "short", year: "numeric" });
+const fechaCorta = (iso) => {
+  const d = typeof iso === "string" && iso.length === 10 ? new Date(iso + "T12:00:00") : new Date(iso);
+  return d.toLocaleDateString("es-PR", { day: "2-digit", month: "short", year: "numeric" });
+};
 
 const comprimirFoto = async (file, maxW = 1200, calidad = 0.8) => {
   const bmp = await createImageBitmap(file);
@@ -181,6 +184,9 @@ function Main({ session, onLogout }) {
   const [query, setQuery] = useState("");
   const [movs, setMovs] = useState([]);
   const [seleccion, setSeleccion] = useState([]);
+  const [vehiculos, setVehiculos] = useState([]);
+  const [mants, setMants] = useState([]);
+  const [vehSelId, setVehSelId] = useState(null);
   const [importMsg, setImportMsg] = useState("");
 
   const importarExcel = async (file) => {
@@ -232,12 +238,16 @@ function Main({ session, onLogout }) {
   };
 
   const cargarDatos = useCallback(async () => {
-    const [eq, ub] = await Promise.all([
+    const [eq, ub, veh, mf] = await Promise.all([
       supabase.from("equipos").select("*").order("nombre"),
       supabase.from("ubicaciones").select("*").eq("activo", true).order("nombre"),
+      supabase.from("vehiculos").select("*").eq("activo", true).order("nombre"),
+      supabase.from("mantenimientos_flota").select("*").order("fecha", { ascending: false }).order("created_at", { ascending: false }).limit(500),
     ]);
     setEquipos(eq.data || []);
     setUbicaciones(ub.data || []);
+    setVehiculos(veh.data || []);
+    setMants(mf.data || []);
     setBrigadas((ub.data || []).filter((u) => u.tipo === "brigada").map((u) => u.nombre));
     setCargando(false);
   }, []);
@@ -299,6 +309,30 @@ function Main({ session, onLogout }) {
         a_tipo: a.tipo, a_detalle: a.detalle, nota: nota || null, foto_url: fotoUrl,
       });
     }
+    await cargarDatos();
+  };
+
+  const agregarVehiculo = async (nombre, tipo, placa) => {
+    await supabase.from("vehiculos").insert({ nombre, tipo, placa: placa || null });
+    await cargarDatos();
+  };
+
+  const eliminarVehiculo = async (id) => {
+    await supabase.from("vehiculos").delete().eq("id", id);
+    setView("flota");
+    await cargarDatos();
+  };
+
+  const registrarMant = async (vehiculoId, tipo, fecha, nota) => {
+    await supabase.from("mantenimientos_flota").insert({
+      vehiculo_id: vehiculoId, tipo, fecha, nota: nota || null,
+      usuario_id: session.id, usuario_nombre: session.nombre,
+    });
+    await cargarDatos();
+  };
+
+  const eliminarMant = async (id) => {
+    await supabase.from("mantenimientos_flota").delete().eq("id", id);
     await cargarDatos();
   };
 
@@ -395,7 +429,19 @@ function Main({ session, onLogout }) {
           {view === "list" && (
             <ListView modo="inicio" equipos={equipos} conteo={conteo} filtro={filtro} setFiltro={setFiltro}
               query={query} setQuery={setQuery} onItem={(id) => openDetail(id, "list")} session={session} onLogout={onLogout}
-              onAdmin={() => setView("admin")} />
+              onAdmin={() => setView("admin")} onFlota={() => setView("flota")} />
+          )}
+          {view === "flota" && (
+            <FlotaView vehiculos={vehiculos} mants={mants} isAdmin={session.rol === "admin"}
+              onBack={() => setView("list")} onOpen={(id) => { setVehSelId(id); setView("flotaDetail"); }}
+              onAdd={agregarVehiculo} />
+          )}
+          {view === "flotaDetail" && vehiculos.find((v) => v.id === vehSelId) && (
+            <VehiculoView vehiculo={vehiculos.find((v) => v.id === vehSelId)}
+              mants={mants.filter((m) => m.vehiculo_id === vehSelId)}
+              isAdmin={session.rol === "admin"}
+              onBack={() => setView("flota")} onRegistrar={registrarMant}
+              onEliminarMant={eliminarMant} onEliminarVeh={eliminarVehiculo} />
           )}
           {view === "admin" && session.rol === "admin" && (
             <AdminView ubicaciones={ubicaciones} onBack={() => setView("list")}
@@ -454,7 +500,7 @@ function CatTile({ cat, foto, size = 44 }) {
   );
 }
 
-function ListView({ modo, equipos, conteo, filtro, setFiltro, query, setQuery, onItem, session, onLogout, seleccion = [], onContinuar, isAdmin, onImport, importMsg, onCerrarMsg, onAdmin }) {
+function ListView({ modo, equipos, conteo, filtro, setFiltro, query, setQuery, onItem, session, onLogout, seleccion = [], onContinuar, isAdmin, onImport, importMsg, onCerrarMsg, onAdmin, onFlota }) {
   const cards = [["almacen", "Almacén"], ["proyecto", "Proyecto"], ["camion", "Camión"], ["taller", "Taller"]];
   const chips = [["todos", "Todos"], ["almacen", "Almacén"], ["proyecto", "Proyecto"], ["camion", "Camión"], ["taller", "Taller"]];
   if (modo === "equipos") chips.push(["retirados", "Retirados"]);
@@ -490,7 +536,7 @@ function ListView({ modo, equipos, conteo, filtro, setFiltro, query, setQuery, o
               </div>
               <div className="flex gap-5 items-center" style={{ color: "#cdd6e4" }}>
                 {session.rol === "admin" && <button onClick={onAdmin} title="Administración"><Settings size={20} /></button>}
-                <Bell size={21} />
+                <button onClick={onFlota} title="Flota"><Truck size={21} /></button>
                 <button onClick={onLogout} title="Salir"><LogOut size={20} /></button>
               </div>
             </>
@@ -1073,6 +1119,219 @@ function NuevoView({ ubicaciones, onBack, onSave }) {
           style={{ minHeight: 54, background: listo ? AMBER : "#d8dbe1", color: listo ? NAVY : "#9aa0ab", fontSize: 16 }}>
           {guardando ? <Loader2 size={18} className="animate-spin" /> : <><Plus size={19} /> Guardar equipo</>}
         </button>
+      </div>
+    </div>
+  );
+}
+
+const TIPOS_VEH = { camion: "Camión", pickup: "Pickup", van: "Van", otro: "Otro" };
+const TIPOS_MANT = ["Cambio de aceite", "Gomas", "Frenos", "Batería", "Filtros", "Reparación", "Inspección / Marbete", "Otro"];
+
+function FlotaView({ vehiculos, mants, isAdmin, onBack, onOpen, onAdd }) {
+  const [showForm, setShowForm] = useState(false);
+  const [nombre, setNombre] = useState("");
+  const [tipo, setTipo] = useState("camion");
+  const [placa, setPlaca] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const ultimo = (vid) => mants.find((m) => m.vehiculo_id === vid);
+  const listo = nombre.trim() && !busy;
+
+  const guardar = async () => {
+    setBusy(true);
+    await onAdd(nombre.trim(), tipo, placa.trim());
+    setNombre(""); setPlaca(""); setTipo("camion"); setShowForm(false); setBusy(false);
+  };
+
+  return (
+    <div className="flex-1 pb-28">
+      <SubHeader title="Flota de vehículos" onBack={onBack} />
+      <div className={`${WRAP} p-4`}>
+
+        {isAdmin && (
+          <div className="mb-3">
+            {!showForm ? (
+              <button onClick={() => setShowForm(true)}
+                className="w-full rounded-xl font-medium flex items-center justify-center gap-2"
+                style={{ minHeight: 50, background: AMBER, color: NAVY, fontSize: 15 }}>
+                <Plus size={18} /> Añadir vehículo
+              </button>
+            ) : (
+              <div className="bg-white rounded-xl border border-slate-200 p-3">
+                <div className="text-slate-400 mb-2" style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: ".04em" }}>Nuevo vehículo</div>
+                <input value={nombre} onChange={(e) => setNombre(e.target.value)} placeholder="Nombre — Ej. Camión 06, Pickup F-150 blanca"
+                  className="w-full bg-white border border-slate-200 rounded-lg px-3 text-slate-800 outline-none" style={{ height: 48, fontSize: 16 }} />
+                <div className="grid grid-cols-2 gap-2 mt-2">
+                  <div className="relative">
+                    <select value={tipo} onChange={(e) => setTipo(e.target.value)}
+                      className="w-full appearance-none bg-white border border-slate-200 rounded-lg px-3 pr-8 text-slate-800" style={{ height: 48, fontSize: 15 }}>
+                      {Object.entries(TIPOS_VEH).map(([k, l]) => <option key={k} value={k}>{l}</option>)}
+                    </select>
+                    <ChevronDown size={16} className="text-slate-400 absolute right-2.5 pointer-events-none" style={{ top: 16 }} />
+                  </div>
+                  <input value={placa} onChange={(e) => setPlaca(e.target.value)} placeholder="Tablilla (opcional)"
+                    className="w-full bg-white border border-slate-200 rounded-lg px-3 text-slate-800 outline-none" style={{ height: 48, fontSize: 15 }} />
+                </div>
+                <div className="grid grid-cols-2 gap-2 mt-2">
+                  <button onClick={() => setShowForm(false)} className="rounded-xl border border-slate-200 bg-white text-slate-600" style={{ minHeight: 46, fontSize: 14 }}>Cancelar</button>
+                  <button disabled={!listo} onClick={guardar}
+                    className="rounded-xl font-medium flex items-center justify-center gap-2"
+                    style={{ minHeight: 46, fontSize: 14, background: listo ? AMBER : "#d8dbe1", color: listo ? NAVY : "#9aa0ab" }}>
+                    {busy ? <Loader2 size={16} className="animate-spin" /> : <><Plus size={16} /> Guardar</>}
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        <div className="flex flex-col gap-2.5">
+          {vehiculos.length === 0 && <div className="text-center text-slate-400 text-sm py-10">No hay vehículos todavía.{isAdmin ? " Añade el primero arriba." : ""}</div>}
+          {vehiculos.map((v) => {
+            const u = ultimo(v.id);
+            return (
+              <button key={v.id} onClick={() => onOpen(v.id)} className="bg-white rounded-xl border border-slate-200 p-3 flex items-center gap-3 text-left" style={{ minHeight: 70 }}>
+                <div className="rounded-lg flex items-center justify-center shrink-0" style={{ width: 44, height: 44, background: "#eef1f6", color: NAVY }}>
+                  {v.tipo === "pickup" || v.tipo === "otro" ? <Car size={22} strokeWidth={1.8} /> : <Truck size={22} strokeWidth={1.8} />}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="font-medium text-slate-800 truncate" style={{ fontSize: 15 }}>{v.nombre}</div>
+                  <div className="text-slate-400 truncate" style={{ fontSize: 12 }}>
+                    {TIPOS_VEH[v.tipo] || v.tipo}{v.placa ? ` · ${v.placa}` : ""}
+                    {u ? ` · Últ.: ${u.tipo} — ${fechaCorta(u.fecha)}` : " · Sin mantenimientos"}
+                  </div>
+                </div>
+                <ChevronRight size={18} className="text-slate-300 shrink-0" />
+              </button>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function VehiculoView({ vehiculo, mants, isAdmin, onBack, onRegistrar, onEliminarMant, onEliminarVeh }) {
+  const [tipo, setTipo] = useState("");
+  const [fecha, setFecha] = useState(new Date().toISOString().slice(0, 10));
+  const [nota, setNota] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [delMantId, setDelMantId] = useState(null);
+  const [confirmVeh, setConfirmVeh] = useState(false);
+
+  const listo = tipo && fecha && !busy;
+
+  const guardar = async () => {
+    setBusy(true);
+    await onRegistrar(vehiculo.id, tipo, fecha, nota.trim());
+    setTipo(""); setNota(""); setFecha(new Date().toISOString().slice(0, 10)); setBusy(false);
+  };
+
+  return (
+    <div className="flex-1 pb-28">
+      <SubHeader title="Detalle del vehículo" onBack={onBack} />
+      <div className={`${WRAP} p-4`}>
+
+        <div className="bg-white rounded-xl border border-slate-200 p-4 flex items-center gap-3">
+          <div className="rounded-lg flex items-center justify-center shrink-0" style={{ width: 54, height: 54, background: "#eef1f6", color: NAVY }}>
+            {vehiculo.tipo === "pickup" || vehiculo.tipo === "otro" ? <Car size={27} strokeWidth={1.8} /> : <Truck size={27} strokeWidth={1.8} />}
+          </div>
+          <div className="flex-1 min-w-0">
+            <div className="font-medium text-slate-800" style={{ fontSize: 16 }}>{vehiculo.nombre}</div>
+            <div className="text-slate-400" style={{ fontSize: 12 }}>{TIPOS_VEH[vehiculo.tipo] || vehiculo.tipo}{vehiculo.placa ? ` · ${vehiculo.placa}` : ""}</div>
+          </div>
+        </div>
+
+        <div className="bg-white rounded-xl border border-slate-200 p-3 mt-3">
+          <div className="text-slate-400 mb-2" style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: ".04em" }}>Registrar mantenimiento</div>
+          <div className="grid grid-cols-2 gap-2">
+            <div className="relative">
+              <select value={tipo} onChange={(e) => setTipo(e.target.value)}
+                className="w-full appearance-none bg-white border border-slate-200 rounded-lg px-3 pr-8 text-slate-800" style={{ height: 48, fontSize: 15 }}>
+                <option value="">Tipo…</option>
+                {TIPOS_MANT.map((t) => <option key={t} value={t}>{t}</option>)}
+              </select>
+              <ChevronDown size={16} className="text-slate-400 absolute right-2.5 pointer-events-none" style={{ top: 16 }} />
+            </div>
+            <input type="date" value={fecha} onChange={(e) => setFecha(e.target.value)}
+              className="w-full bg-white border border-slate-200 rounded-lg px-3 text-slate-800 outline-none" style={{ height: 48, fontSize: 15 }} />
+          </div>
+          <textarea value={nota} onChange={(e) => setNota(e.target.value)} rows={2}
+            placeholder="Nota (opcional) — Ej. aceite 15W-40, goma delantera derecha…"
+            className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-slate-800 outline-none resize-none mt-2" style={{ fontSize: 16 }} />
+          <button disabled={!listo} onClick={guardar}
+            className="w-full rounded-xl font-medium flex items-center justify-center gap-2 mt-2"
+            style={{ minHeight: 50, background: listo ? AMBER : "#d8dbe1", color: listo ? NAVY : "#9aa0ab", fontSize: 15 }}>
+            {busy ? <Loader2 size={17} className="animate-spin" /> : <><Check size={18} /> Guardar mantenimiento</>}
+          </button>
+        </div>
+
+        <div className="mt-5">
+          <div className="text-slate-500 font-medium mb-2 px-1" style={{ fontSize: 15 }}>Historial de mantenimientos</div>
+          <div className="flex flex-col gap-2.5">
+            {mants.length === 0 && <div className="text-slate-400 text-sm px-1">Sin mantenimientos registrados.</div>}
+            {mants.map((m) => (
+              <div key={m.id} className="bg-white rounded-xl border border-slate-200 p-3">
+                {delMantId === m.id ? (
+                  <div>
+                    <div className="text-slate-700" style={{ fontSize: 13 }}>¿Eliminar este registro de <b>{m.tipo}</b>?</div>
+                    <div className="grid grid-cols-2 gap-2 mt-2.5">
+                      <button onClick={() => setDelMantId(null)} className="rounded-xl border border-slate-200 bg-white text-slate-600" style={{ minHeight: 44, fontSize: 14 }}>Cancelar</button>
+                      <button onClick={async () => { await onEliminarMant(m.id); setDelMantId(null); }}
+                        className="rounded-xl font-medium flex items-center justify-center gap-2" style={{ minHeight: 44, fontSize: 14, background: "#dc2626", color: "#fff" }}>
+                        <Trash2 size={15} /> Eliminar
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="flex items-start gap-3">
+                    <div className="rounded-lg flex items-center justify-center shrink-0" style={{ width: 38, height: 38, background: "#eef1f6", color: NAVY }}>
+                      <Wrench size={18} strokeWidth={1.8} />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="font-medium text-slate-800" style={{ fontSize: 14 }}>{m.tipo} <span className="text-slate-400 font-normal">· {fechaCorta(m.fecha)}</span></div>
+                      {m.nota && <div className="text-slate-500 mt-0.5" style={{ fontSize: 13 }}>{m.nota}</div>}
+                      <div className="text-slate-400 mt-1 flex items-center gap-1.5" style={{ fontSize: 11 }}>
+                        <CircleUser size={13} /> {m.usuario_nombre || "—"}
+                      </div>
+                    </div>
+                    {isAdmin && (
+                      <button onClick={() => setDelMantId(m.id)} className="rounded-lg border flex items-center justify-center bg-white shrink-0"
+                        style={{ width: 36, height: 36, borderColor: "#fecaca", color: "#b91c1c" }}>
+                        <Trash2 size={15} />
+                      </button>
+                    )}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {isAdmin && (
+          <div className="mt-5">
+            {!confirmVeh ? (
+              <button onClick={() => setConfirmVeh(true)}
+                className="w-full rounded-xl border flex items-center justify-center gap-2 bg-white"
+                style={{ minHeight: 48, fontSize: 14, borderColor: "#fecaca", color: "#b91c1c" }}>
+                <Trash2 size={16} /> Eliminar vehículo
+              </button>
+            ) : (
+              <div className="bg-white border border-red-200 rounded-xl p-3">
+                <div className="text-slate-700" style={{ fontSize: 13 }}>
+                  ¿Eliminar <b>{vehiculo.nombre}</b> y todo su historial de mantenimientos? Esta acción no se puede deshacer.
+                </div>
+                <div className="grid grid-cols-2 gap-2 mt-3">
+                  <button onClick={() => setConfirmVeh(false)} className="rounded-xl border border-slate-200 bg-white text-slate-600" style={{ minHeight: 46, fontSize: 14 }}>Cancelar</button>
+                  <button onClick={() => onEliminarVeh(vehiculo.id)}
+                    className="rounded-xl font-medium flex items-center justify-center gap-2" style={{ minHeight: 46, fontSize: 14, background: "#dc2626", color: "#fff" }}>
+                    <Trash2 size={15} /> Sí, eliminar
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );
