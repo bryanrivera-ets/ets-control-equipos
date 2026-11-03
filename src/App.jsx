@@ -211,12 +211,25 @@ function Main({ session, onLogout }) {
         return "";
       };
 
-      let ok = 0, omitidas = 0;
+      // Series existentes, sin mayúsculas ni espacios, para saltar duplicados
+      const normSerie = (s) => String(s || "").replace(/\s+/g, "").toLowerCase();
+      const { data: existentes } = await supabase.from("equipos").select("serie");
+      const series = new Set((existentes || equipos).map((e) => normSerie(e.serie)));
+      // Categorías por nombre normalizado (sin mayúsculas ni acentos)
+      const cats = new Map(categorias.map((c) => [norm(c.nombre), c.nombre]));
+
+      let ok = 0, duplicadas = 0, incompletas = 0, errores = 0;
       for (const f of filas) {
         const nombre = col(f, "nombre");
         const serie = col(f, "numero de serie", "num de serie", "serie");
-        if (!nombre || !serie) { omitidas++; continue; }
-        const categoria = col(f, "categoria") || "Herramienta";
+        if (!nombre || !serie) { incompletas++; continue; }
+        if (series.has(normSerie(serie))) { duplicadas++; continue; }
+        let categoria = col(f, "categoria") || "Herramienta";
+        if (cats.has(norm(categoria))) categoria = cats.get(norm(categoria));
+        else {
+          await supabase.from("categorias").insert({ nombre: categoria });
+          cats.set(norm(categoria), categoria);
+        }
         const tipo = tipoDe(col(f, "ubicacion"));
         const detalle = col(f, "detalle") || (tipo === "almacen" ? "Almacén principal" : "");
 
@@ -228,14 +241,40 @@ function Main({ session, onLogout }) {
             equipo_id: data.id, usuario_id: session.id, usuario_nombre: session.nombre,
             a_tipo: tipo, a_detalle: detalle, nota: "Alta de equipo (importación Excel)",
           });
+          series.add(normSerie(serie));
           ok++;
-        } else omitidas++;
+        } else errores++;
       }
       await cargarDatos();
-      setImportMsg(`Importados ${ok} equipos.` + (omitidas ? ` ${omitidas} filas omitidas (sin nombre/serie o error).` : ""));
+      setImportMsg(`Importados ${ok} equipos. Saltados: ${duplicadas} por número de serie duplicado, ${incompletas} por faltar nombre o serie.`
+        + (errores ? ` ${errores} con error al guardar.` : ""));
     } catch (e) {
       setImportMsg("No se pudo leer el archivo. Verifica que sea la plantilla de Excel.");
     }
+  };
+
+  const descargarPlantilla = () => {
+    const wsEq = XLSX.utils.aoa_to_sheet([["Nombre", "Numero de Serie", "Categoria", "Ubicacion", "Detalle"]]);
+    wsEq["!cols"] = [{ wch: 30 }, { wch: 18 }, { wch: 16 }, { wch: 14 }, { wch: 28 }];
+    const wsIns = XLSX.utils.aoa_to_sheet([
+      ["Instrucciones"],
+      ["Cada fila de la hoja \"Equipos\" es una máquina."],
+      ["Nombre y Numero de Serie son obligatorios."],
+      ["Ubicacion puede ser: Almacén, Proyecto, Camión o Taller."],
+      ["Categoria debe usar los nombres de Administración > Categorías (ver hoja \"Categorias\")."],
+      [],
+      ["Ejemplo:"],
+      ["Nombre", "Numero de Serie", "Categoria", "Ubicacion", "Detalle"],
+      ["Vacuum Pequeño", "VAC-P-00", "Vacuum", "Almacén", "Mezzanine / 1er piso"],
+    ]);
+    wsIns["!cols"] = [{ wch: 30 }, { wch: 18 }, { wch: 16 }, { wch: 14 }, { wch: 28 }];
+    const wsCat = XLSX.utils.aoa_to_sheet([["Categoria"], ...categorias.map((c) => [c.nombre])]);
+    wsCat["!cols"] = [{ wch: 24 }];
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, wsEq, "Equipos");
+    XLSX.utils.book_append_sheet(wb, wsIns, "Instrucciones");
+    XLSX.utils.book_append_sheet(wb, wsCat, "Categorias");
+    XLSX.writeFile(wb, "ETS_Plantilla_Equipos.xlsx");
   };
 
   const cargarDatos = useCallback(async () => {
@@ -467,7 +506,7 @@ function Main({ session, onLogout }) {
           {view === "equipos" && (
             <ListView modo="equipos" equipos={equipos} conteo={conteo} filtro={filtro} setFiltro={setFiltro}
               query={query} setQuery={setQuery} onItem={(id) => openDetail(id, "equipos")}
-              isAdmin={session.rol === "admin"} onImport={importarExcel} importMsg={importMsg} onCerrarMsg={() => setImportMsg("")} />
+              isAdmin={session.rol === "admin"} onImport={importarExcel} onPlantilla={descargarPlantilla} importMsg={importMsg} onCerrarMsg={() => setImportMsg("")} />
           )}
           {view === "mover" && (
             <ListView modo="mover" equipos={equipos} conteo={conteo} filtro={filtro} setFiltro={setFiltro}
@@ -517,7 +556,7 @@ function CatTile({ cat, foto, size = 44 }) {
   );
 }
 
-function ListView({ modo, equipos, conteo, filtro, setFiltro, query, setQuery, onItem, session, onLogout, seleccion = [], onContinuar, isAdmin, onImport, importMsg, onCerrarMsg, onAdmin, onFlota }) {
+function ListView({ modo, equipos, conteo, filtro, setFiltro, query, setQuery, onItem, session, onLogout, seleccion = [], onContinuar, isAdmin, onImport, onPlantilla, importMsg, onCerrarMsg, onAdmin, onFlota }) {
   const cards = [["almacen", "Almacén"], ["proyecto", "Proyecto"], ["camion", "Camión"], ["taller", "Taller"]];
   const chips = [["todos", "Todos"], ["almacen", "Almacén"], ["proyecto", "Proyecto"], ["camion", "Camión"], ["taller", "Taller"]];
   if (modo === "equipos") chips.push(["retirados", "Retirados"]);
@@ -564,11 +603,16 @@ function ListView({ modo, equipos, conteo, filtro, setFiltro, query, setQuery, o
                 <div style={{ color: NAVY_SOFT, fontSize: 12 }}>{modo === "equipos" ? "Inventario completo" : "Marca las máquinas que vas a mover"}</div>
               </div>
               {modo === "equipos" && isAdmin && (
-                <label className="flex items-center gap-2 rounded-lg px-3 cursor-pointer" style={{ background: AMBER, color: NAVY, minHeight: 42, fontSize: 14, fontWeight: 500 }}>
-                  <Upload size={17} /> Importar Excel
-                  <input type="file" accept=".xlsx,.xls" className="hidden"
-                    onChange={(e) => { const f = e.target.files?.[0]; if (f) onImport(f); e.target.value = ""; }} />
-                </label>
+                <div className="flex items-center gap-2">
+                  <button onClick={onPlantilla} className="flex items-center gap-2 rounded-lg px-3" style={{ background: "#fff", color: NAVY, minHeight: 42, fontSize: 14, fontWeight: 500 }}>
+                    <Download size={17} /> Descargar plantilla
+                  </button>
+                  <label className="flex items-center gap-2 rounded-lg px-3 cursor-pointer" style={{ background: AMBER, color: NAVY, minHeight: 42, fontSize: 14, fontWeight: 500 }}>
+                    <Upload size={17} /> Importar Excel
+                    <input type="file" accept=".xlsx,.xls" className="hidden"
+                      onChange={(e) => { const f = e.target.files?.[0]; if (f) onImport(f); e.target.value = ""; }} />
+                  </label>
+                </div>
               )}
             </div>
           )}
