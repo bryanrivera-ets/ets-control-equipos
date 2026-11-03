@@ -9,7 +9,7 @@ import {
   Home, Boxes, ArrowLeftRight, BarChart3, Check, ChevronDown, Loader2,
   Ban, RotateCcw, Trash2, AlertTriangle, CheckCircle2, Circle, Upload, Camera, Settings, Download, X,
   Zap, Droplets, Cog, Flame, Hammer, Gauge, Wrench, Activity,
-  Warehouse, HardHat, Truck, Car,
+  Warehouse, HardHat, Truck, Car, FileText,
 } from "lucide-react";
 
 const NAVY = "#16233a";
@@ -60,6 +60,8 @@ const comprimirFoto = async (file, maxW = 1200, calidad = 0.8) => {
   c.getContext("2d").drawImage(bmp, 0, 0, c.width, c.height);
   return new Promise((r) => c.toBlob(r, "image/jpeg", calidad));
 };
+
+const MAX_DOCS = 5;
 
 const servicioVencido = (e) =>
   e.ultimo_servicio && e.intervalo_servicio_dias
@@ -366,15 +368,33 @@ function Main({ session, onLogout }) {
     await cargarDatos();
   };
 
-  const registrarMant = async (vehiculoId, tipo, fecha, nota) => {
+  const registrarMant = async (vehiculoId, tipo, fecha, nota, archivos = []) => {
+    const documentos = [], fallidos = [];
+    for (const [i, f] of archivos.entries()) {
+      try {
+        const esPdf = f.type === "application/pdf";
+        // Recibos: resolución alta para que el texto se lea bien
+        const body = esPdf ? f : await comprimirFoto(f, 2000, 0.8);
+        const path = `mantenimientos/${Date.now()}-${i}.${esPdf ? "pdf" : "jpg"}`;
+        const { error } = await supabase.storage.from("fotos").upload(path, body, { contentType: esPdf ? "application/pdf" : "image/jpeg" });
+        if (error) throw error;
+        documentos.push({ url: supabase.storage.from("fotos").getPublicUrl(path).data.publicUrl, tipo: esPdf ? "pdf" : "imagen", nombre: f.name });
+      } catch { fallidos.push(f.name); }
+    }
+    if (fallidos.length) alert(`No se pudieron subir estos archivos: ${fallidos.join(", ")}. El mantenimiento se guarda con los demás.`);
     await supabase.from("mantenimientos_flota").insert({
       vehiculo_id: vehiculoId, tipo, fecha, nota: nota || null,
-      usuario_id: session.id, usuario_nombre: session.nombre,
+      usuario_id: session.id, usuario_nombre: session.nombre, documentos,
     });
     await cargarDatos();
   };
 
   const eliminarMant = async (id) => {
+    const m = mants.find((x) => x.id === id);
+    const paths = (m?.documentos || [])
+      .map((d) => decodeURIComponent(String(d.url).split("/object/public/fotos/")[1] || ""))
+      .filter(Boolean);
+    if (paths.length) await supabase.storage.from("fotos").remove(paths);
     await supabase.from("mantenimientos_flota").delete().eq("id", id);
     await cargarDatos();
   };
@@ -1276,6 +1296,7 @@ function VehiculoView({ vehiculo, mants, isAdmin, onBack, onRegistrar, onElimina
   const [tipo, setTipo] = useState("");
   const [fecha, setFecha] = useState(new Date().toISOString().slice(0, 10));
   const [nota, setNota] = useState("");
+  const [archivos, setArchivos] = useState([]); // [{file, prev}]
   const [busy, setBusy] = useState(false);
   const [delMantId, setDelMantId] = useState(null);
   const [confirmVeh, setConfirmVeh] = useState(false);
@@ -1284,8 +1305,20 @@ function VehiculoView({ vehiculo, mants, isAdmin, onBack, onRegistrar, onElimina
 
   const guardar = async () => {
     setBusy(true);
-    await onRegistrar(vehiculo.id, tipo, fecha, nota.trim());
-    setTipo(""); setNota(""); setFecha(new Date().toISOString().slice(0, 10)); setBusy(false);
+    await onRegistrar(vehiculo.id, tipo, fecha, nota.trim(), archivos.map((a) => a.file));
+    archivos.forEach((a) => a.prev && URL.revokeObjectURL(a.prev));
+    setTipo(""); setNota(""); setArchivos([]); setFecha(new Date().toISOString().slice(0, 10)); setBusy(false);
+  };
+
+  const elegirArchivos = (files) => {
+    const nuevos = Array.from(files).slice(0, MAX_DOCS - archivos.length).map((file) => ({
+      file, prev: file.type.startsWith("image/") ? URL.createObjectURL(file) : "",
+    }));
+    setArchivos((p) => [...p, ...nuevos]);
+  };
+
+  const quitarArchivo = (i) => {
+    setArchivos((p) => { if (p[i].prev) URL.revokeObjectURL(p[i].prev); return p.filter((_, j) => j !== i); });
   };
 
   return (
@@ -1320,10 +1353,37 @@ function VehiculoView({ vehiculo, mants, isAdmin, onBack, onRegistrar, onElimina
           <textarea value={nota} onChange={(e) => setNota(e.target.value)} rows={2}
             placeholder="Nota (opcional) — Ej. aceite 15W-40, goma delantera derecha…"
             className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-slate-800 outline-none resize-none mt-2" style={{ fontSize: 16 }} />
+          {archivos.length > 0 && (
+            <div className="flex flex-wrap gap-2 mt-2">
+              {archivos.map((a, i) => (
+                <div key={i} className="relative">
+                  {a.prev ? (
+                    <img src={a.prev} alt={a.file.name} className="rounded-lg object-cover border border-slate-200" style={{ width: 64, height: 64 }} />
+                  ) : (
+                    <div className="rounded-lg border border-slate-200 bg-slate-50 flex flex-col items-center justify-center text-slate-500 px-1" style={{ width: 64, height: 64 }}>
+                      <FileText size={20} />
+                      <div className="w-full truncate text-center" style={{ fontSize: 9 }}>{a.file.name}</div>
+                    </div>
+                  )}
+                  <button onClick={() => quitarArchivo(i)} disabled={busy}
+                    className="absolute rounded-full bg-white border border-slate-200 flex items-center justify-center"
+                    style={{ width: 22, height: 22, top: -6, right: -6, color: "#475569" }}><X size={12} /></button>
+                </div>
+              ))}
+            </div>
+          )}
+          {archivos.length < MAX_DOCS && (
+            <label className="flex items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white cursor-pointer text-slate-600 mt-2" style={{ minHeight: 48, fontSize: 14 }}>
+              <Camera size={17} /> Adjuntar recibo o documento
+              <input type="file" accept="image/*,application/pdf" multiple className="hidden" disabled={busy}
+                onChange={(e) => { if (e.target.files?.length) elegirArchivos(e.target.files); e.target.value = ""; }} />
+            </label>
+          )}
+          {archivos.length > 0 && <div className="text-slate-400 mt-1 px-1" style={{ fontSize: 11 }}>{archivos.length} de {MAX_DOCS} archivos</div>}
           <button disabled={!listo} onClick={guardar}
             className="w-full rounded-xl font-medium flex items-center justify-center gap-2 mt-2"
             style={{ minHeight: 50, background: listo ? AMBER : "#d8dbe1", color: listo ? NAVY : "#9aa0ab", fontSize: 15 }}>
-            {busy ? <Loader2 size={17} className="animate-spin" /> : <><Check size={18} /> Guardar mantenimiento</>}
+            {busy ? <><Loader2 size={17} className="animate-spin" /> Subiendo…</> : <><Check size={18} /> Guardar mantenimiento</>}
           </button>
         </div>
 
@@ -1352,6 +1412,22 @@ function VehiculoView({ vehiculo, mants, isAdmin, onBack, onRegistrar, onElimina
                     <div className="flex-1 min-w-0">
                       <div className="font-medium text-slate-800" style={{ fontSize: 14 }}>{m.tipo} <span className="text-slate-400 font-normal">· {fechaCorta(m.fecha)}</span></div>
                       {m.nota && <div className="text-slate-500 mt-0.5" style={{ fontSize: 13 }}>{m.nota}</div>}
+                      {m.documentos?.length > 0 && (
+                        <div className="flex flex-wrap gap-2 mt-2">
+                          {m.documentos.map((d, i) => (
+                            <a key={i} href={d.url} target="_blank" rel="noopener noreferrer" title={d.nombre}>
+                              {d.tipo === "pdf" ? (
+                                <div className="rounded-lg border border-slate-200 bg-slate-50 flex flex-col items-center justify-center text-slate-500 px-1" style={{ width: 56, height: 56 }}>
+                                  <FileText size={18} />
+                                  <div className="w-full truncate text-center" style={{ fontSize: 9 }}>{d.nombre || "PDF"}</div>
+                                </div>
+                              ) : (
+                                <img src={d.url} alt={d.nombre || "Documento"} className="rounded-lg object-cover border border-slate-200" style={{ width: 56, height: 56 }} />
+                              )}
+                            </a>
+                          ))}
+                        </div>
+                      )}
                       <div className="text-slate-400 mt-1 flex items-center gap-1.5" style={{ fontSize: 11 }}>
                         <CircleUser size={13} /> {m.usuario_nombre || "—"}
                       </div>
