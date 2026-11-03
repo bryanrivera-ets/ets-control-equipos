@@ -186,6 +186,7 @@ function Main({ session, onLogout }) {
   const [seleccion, setSeleccion] = useState([]);
   const [vehiculos, setVehiculos] = useState([]);
   const [mants, setMants] = useState([]);
+  const [categorias, setCategorias] = useState([]);
   const [vehSelId, setVehSelId] = useState(null);
   const [importMsg, setImportMsg] = useState("");
 
@@ -238,13 +239,16 @@ function Main({ session, onLogout }) {
   };
 
   const cargarDatos = useCallback(async () => {
-    const [eq, ub, veh, mf] = await Promise.all([
+    const [eq, ub, veh, mf, cats] = await Promise.all([
       supabase.from("equipos").select("*").order("nombre"),
       supabase.from("ubicaciones").select("*").eq("activo", true).order("nombre"),
       supabase.from("vehiculos").select("*").eq("activo", true).order("nombre"),
       supabase.from("mantenimientos_flota").select("*").order("fecha", { ascending: false }).order("created_at", { ascending: false }).limit(500),
+      supabase.from("categorias").select("*").eq("activo", true).order("nombre"),
     ]);
     setEquipos(eq.data || []);
+    // Si la tabla de categorías falla, usar la lista fija como respaldo
+    setCategorias(cats.error ? CATEGORIAS.map((nombre) => ({ id: `local-${nombre}`, nombre })) : cats.data || []);
     setUbicaciones(ub.data || []);
     setVehiculos(veh.data || []);
     setMants(mf.data || []);
@@ -402,6 +406,18 @@ function Main({ session, onLogout }) {
     await cargarDatos();
   };
 
+  const agregarCategoria = async (nombre) => {
+    const { error } = await supabase.from("categorias").insert({ nombre });
+    if (error) alert("No se pudo añadir la categoría: " + error.message);
+    await cargarDatos();
+  };
+
+  const eliminarCategoria = async (id) => {
+    const { error } = await supabase.from("categorias").delete().eq("id", id);
+    if (error) alert("No se pudo eliminar la categoría: " + error.message);
+    await cargarDatos();
+  };
+
   const darBaja = async (eq) => {
     const nueva = eq.condicion === "baja" ? "operativo" : "baja";
     await supabase.from("equipos").update({ condicion: nueva, updated_at: new Date().toISOString() }).eq("id", eq.id);
@@ -444,8 +460,9 @@ function Main({ session, onLogout }) {
               onEliminarMant={eliminarMant} onEliminarVeh={eliminarVehiculo} />
           )}
           {view === "admin" && session.rol === "admin" && (
-            <AdminView ubicaciones={ubicaciones} onBack={() => setView("list")}
-              onAdd={agregarUbicacion} onDelete={eliminarUbicacion} />
+            <AdminView ubicaciones={ubicaciones} categorias={categorias} onBack={() => setView("list")}
+              onAdd={agregarUbicacion} onDelete={eliminarUbicacion}
+              onAddCategoria={agregarCategoria} onDeleteCategoria={eliminarCategoria} />
           )}
           {view === "equipos" && (
             <ListView modo="equipos" equipos={equipos} conteo={conteo} filtro={filtro} setFiltro={setFiltro}
@@ -472,7 +489,7 @@ function Main({ session, onLogout }) {
               onBack={() => setView(moveBack)} onConfirm={async (t, d, n, f) => { await mover(t, d, n, f); }} />
           )}
           {view === "nuevo" && (
-            <NuevoView ubicaciones={ubicaciones} onBack={() => setView("list")} onSave={async (eq) => { await agregar(eq); }} />
+            <NuevoView ubicaciones={ubicaciones} categorias={categorias.map((c) => c.nombre)} onBack={() => setView("list")} onSave={async (eq) => { await agregar(eq); }} />
           )}
           {view === "reportes" && <ReportesView equipos={equipos} conteo={conteo} />}
         </div>
@@ -1090,7 +1107,7 @@ function MultiMoveView({ equipos, ubicaciones, brigadas, onBack, onConfirm }) {
   );
 }
 
-function NuevoView({ ubicaciones, onBack, onSave }) {
+function NuevoView({ ubicaciones, categorias, onBack, onSave }) {
   const [nombre, setNombre] = useState("");
   const [serie, setSerie] = useState("");
   const [cat, setCat] = useState("");
@@ -1112,7 +1129,7 @@ function NuevoView({ ubicaciones, onBack, onSave }) {
           <input value={serie} onChange={(e) => setSerie(e.target.value)} placeholder="Ej. GEN-042"
             className="w-full bg-white border border-slate-200 rounded-lg px-3 text-slate-800 outline-none" style={{ height: 48, fontSize: 16 }} />
         </div>
-        <Select label="Categoría" value={cat} onChange={setCat} options={CATEGORIAS} placeholder="Escoge categoría" />
+        <Select label="Categoría" value={cat} onChange={setCat} options={categorias} placeholder="Escoge categoría" />
         <Select label="Ubicación inicial (almacén)" value={estante} onChange={setEstante} options={estantes} placeholder="Escoge estante / zona" />
         <button disabled={!listo || guardando} onClick={async () => { setGuardando(true); await onSave({ nombre, serie, cat, detalle: estante }); }}
           className="w-full rounded-xl font-medium flex items-center justify-center gap-2 mt-5"
@@ -1337,23 +1354,27 @@ function VehiculoView({ vehiculo, mants, isAdmin, onBack, onRegistrar, onElimina
   );
 }
 
-function AdminView({ ubicaciones, onBack, onAdd, onDelete }) {
+function AdminView({ ubicaciones, categorias, onBack, onAdd, onDelete, onAddCategoria, onDeleteCategoria }) {
   const [tab, setTab] = useState("proyecto");
   const [nuevo, setNuevo] = useState("");
   const [delId, setDelId] = useState(null);
   const [busy, setBusy] = useState(false);
 
-  const tabs = [["proyecto", "Proyectos"], ["brigada", "Brigadas"], ["camion", "Camiones"], ["almacen", "Estantes"]];
-  const items = ubicaciones.filter((u) => u.tipo === tab);
+  const tabs = [["proyecto", "Proyectos"], ["brigada", "Brigadas"], ["camion", "Camiones"], ["almacen", "Estantes"], ["categoria", "Categorías"]];
+  const esCategoria = tab === "categoria";
+  const items = esCategoria ? categorias : ubicaciones.filter((u) => u.tipo === tab);
   const nombreTab = tabs.find(([k]) => k === tab)[1];
   const duplicado = items.some((i) => i.nombre.trim().toLowerCase() === nuevo.trim().toLowerCase());
   const puedeAgregar = nuevo.trim() && !duplicado && !busy;
 
   const agregar = async () => {
     setBusy(true);
-    await onAdd(tab, nuevo.trim());
+    if (esCategoria) await onAddCategoria(nuevo.trim());
+    else await onAdd(tab, nuevo.trim());
     setNuevo(""); setBusy(false);
   };
+
+  const eliminar = (id) => (esCategoria ? onDeleteCategoria(id) : onDelete(id));
 
   return (
     <div className="flex-1 pb-28">
@@ -1373,7 +1394,7 @@ function AdminView({ ubicaciones, onBack, onAdd, onDelete }) {
           <div className="flex gap-2">
             <input value={nuevo} onChange={(e) => setNuevo(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && puedeAgregar && agregar()}
-              placeholder={tab === "proyecto" ? "Ej. Plaza Caguas" : tab === "brigada" ? "Ej. Brigada E" : tab === "camion" ? "Ej. Camión 06" : "Ej. Estante D-01"}
+              placeholder={tab === "proyecto" ? "Ej. Plaza Caguas" : tab === "brigada" ? "Ej. Brigada E" : tab === "camion" ? "Ej. Camión 06" : esCategoria ? "Ej. Vacuum" : "Ej. Estante D-01"}
               className="flex-1 bg-white border border-slate-200 rounded-lg px-3 text-slate-800 outline-none" style={{ height: 48, fontSize: 16 }} />
             <button disabled={!puedeAgregar} onClick={agregar}
               className="rounded-lg font-medium flex items-center gap-1.5 px-4"
@@ -1393,7 +1414,7 @@ function AdminView({ ubicaciones, onBack, onAdd, onDelete }) {
                   <div className="text-slate-700" style={{ fontSize: 13 }}>¿Eliminar <b>{u.nombre}</b> de la lista?</div>
                   <div className="grid grid-cols-2 gap-2 mt-2.5">
                     <button onClick={() => setDelId(null)} className="rounded-xl border border-slate-200 bg-white text-slate-600" style={{ minHeight: 44, fontSize: 14 }}>Cancelar</button>
-                    <button disabled={busy} onClick={async () => { setBusy(true); await onDelete(u.id); setDelId(null); setBusy(false); }}
+                    <button disabled={busy} onClick={async () => { setBusy(true); await eliminar(u.id); setDelId(null); setBusy(false); }}
                       className="rounded-xl font-medium flex items-center justify-center gap-2" style={{ minHeight: 44, fontSize: 14, background: "#dc2626", color: "#fff" }}>
                       {busy ? <Loader2 size={16} className="animate-spin" /> : <><Trash2 size={15} /> Eliminar</>}
                     </button>
@@ -1413,7 +1434,9 @@ function AdminView({ ubicaciones, onBack, onAdd, onDelete }) {
         </div>
 
         <div className="text-slate-400 mt-4 px-1" style={{ fontSize: 12 }}>
-          Nota: eliminar un lugar solo lo quita de los menús. Las máquinas que ya están ahí conservan su ubicación hasta que las muevas.
+          {esCategoria
+            ? "Nota: eliminar una categoría solo la quita del menú de equipo nuevo. Los equipos que ya la tienen la conservan."
+            : "Nota: eliminar un lugar solo lo quita de los menús. Las máquinas que ya están ahí conservan su ubicación hasta que las muevas."}
         </div>
       </div>
     </div>
