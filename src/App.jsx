@@ -17,15 +17,27 @@ import { FlotaView } from "./views/FlotaView";
 import { VehiculoView } from "./views/VehiculoView";
 import { AdminView } from "./views/AdminView";
 import { ReportesView } from "./views/ReportesView";
+import { ScanView } from "./views/ScanView";
+import { leerEquipoDeHash, limpiarHashEquipo } from "./lib/qr";
 
 export default function App() {
   const [session, setSession] = useState(null);
+  // Equipo a abrir cuando se entra con un enlace de QR (#equipo=<id>); se abre después del login
+  const [equipoPendiente, setEquipoPendiente] = useState(() => leerEquipoDeHash());
+
+  useEffect(() => {
+    const alCambiarHash = () => { const id = leerEquipoDeHash(); if (id) setEquipoPendiente(id); };
+    window.addEventListener("hashchange", alCambiarHash);
+    return () => window.removeEventListener("hashchange", alCambiarHash);
+  }, []);
+
   if (!session) return <Login onLogin={setSession} />;
-  return <Main session={session} onLogout={() => setSession(null)} />;
+  return <Main session={session} onLogout={() => setSession(null)}
+    equipoPendiente={equipoPendiente} onEquipoPendienteAbierto={() => setEquipoPendiente(null)} />;
 }
 
 /* ------------------------------------------------------------------- MAIN */
-function Main({ session, onLogout }) {
+function Main({ session, onLogout, equipoPendiente, onEquipoPendienteAbierto }) {
   const [equipos, setEquipos] = useState([]);
   const [ubicaciones, setUbicaciones] = useState([]);
   const [brigadas, setBrigadas] = useState([]);
@@ -198,6 +210,15 @@ function Main({ session, onLogout }) {
     const { data } = await supabase.from("movimientos").select("*").eq("equipo_id", id).order("created_at", { ascending: false });
     setMovs(data || []);
   }, []);
+
+  // Abrir el equipo de un enlace de QR cuando ya cargaron los datos
+  useEffect(() => {
+    if (cargando || !equipoPendiente) return;
+    const eq = equipos.find((e) => String(e.id) === equipoPendiente);
+    limpiarHashEquipo();
+    onEquipoPendienteAbierto();
+    if (eq) openDetail(eq.id, "list");
+  }, [cargando, equipoPendiente, equipos, openDetail, onEquipoPendienteAbierto]);
 
   const toggleSeleccion = (id) =>
     setSeleccion((p) => (p.includes(id) ? p.filter((x) => x !== id) : [...p, id]));
@@ -398,7 +419,10 @@ function Main({ session, onLogout }) {
           {view === "list" && (
             <ListView modo="inicio" equipos={equipos} conteo={conteo} filtro={filtro} setFiltro={setFiltro}
               query={query} setQuery={setQuery} onItem={(id) => openDetail(id, "list")} session={session} onLogout={onLogout}
-              onAdmin={() => setView("admin")} onFlota={() => setView("flota")} />
+              onAdmin={() => setView("admin")} onFlota={() => setView("flota")} onEscanear={() => setView("escanear")} />
+          )}
+          {view === "escanear" && (
+            <ScanView equipos={equipos} onClose={() => setView("list")} onEncontrado={(id) => openDetail(id, "list")} />
           )}
           {view === "flota" && (
             <FlotaView vehiculos={vehiculos} mants={mants} isAdmin={session.rol === "admin"}
@@ -413,7 +437,7 @@ function Main({ session, onLogout }) {
               onEliminarMant={eliminarMant} onEliminarVeh={eliminarVehiculo} />
           )}
           {view === "admin" && (session.rol === "admin" || session.rol === "pm") && (
-            <AdminView ubicaciones={ubicaciones} categorias={categorias} onBack={() => setView("list")}
+            <AdminView ubicaciones={ubicaciones} categorias={categorias} equipos={equipos} onBack={() => setView("list")}
               soloProyectos={session.rol === "pm"}
               onAdd={agregarUbicacion} onDelete={eliminarUbicacion}
               onAddCategoria={agregarCategoria} onDeleteCategoria={eliminarCategoria} />

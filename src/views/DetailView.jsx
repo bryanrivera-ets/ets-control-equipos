@@ -1,7 +1,9 @@
 import { useState } from "react";
 import {
-  CircleUser, ArrowLeftRight, ChevronDown, Loader2, Ban, RotateCcw, Trash2, AlertTriangle, Camera, Wrench,
+  CircleUser, ArrowLeftRight, ChevronDown, Loader2, Ban, RotateCcw, Trash2, AlertTriangle, Camera, Wrench, QrCode, X,
 } from "lucide-react";
+import { QrImage } from "../components/QrImage";
+import { urlEquipo } from "../lib/qr";
 import { NAVY, AMBER, WRAP, tipoMeta } from "../lib/constants";
 import { fmtFecha, formatUbic, diasEn, textoDias, fechaCorta, servicioVencido } from "../lib/utils";
 import { Pill } from "../components/Pill";
@@ -13,6 +15,7 @@ export function DetailView({ equipo, movs, onBack, onMover, onBaja, onEliminar, 
   const [confirmDel, setConfirmDel] = useState(false);
   const [busy, setBusy] = useState(false);
   const [subiendo, setSubiendo] = useState(false);
+  const [verQr, setVerQr] = useState(false);
   const baja = equipo.condicion === "baja";
   const m = tipoMeta[equipo.ubicacion_tipo];
 
@@ -28,6 +31,11 @@ export function DetailView({ equipo, movs, onBack, onMover, onBaja, onEliminar, 
           </div>
           <Pill equipo={equipo} />
         </div>
+
+        <button onClick={() => setVerQr(true)}
+          className="w-full rounded-xl border border-slate-200 bg-white flex items-center justify-center gap-2 text-slate-700 mt-3" style={{ minHeight: 46, fontSize: 14 }}>
+          <QrCode size={17} /> Código QR
+        </button>
 
         <div className="bg-white rounded-xl border border-slate-200 p-4 mt-3">
           <div className="flex items-center justify-between mb-2">
@@ -166,6 +174,19 @@ export function DetailView({ equipo, movs, onBack, onMover, onBaja, onEliminar, 
           </div>
         </div>
       </div>
+
+      {verQr && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-5" style={{ background: "rgba(15,23,42,.6)" }} onClick={() => setVerQr(false)}>
+          <div className="bg-white rounded-2xl p-5 w-full text-center" style={{ maxWidth: 400 }} onClick={(e) => e.stopPropagation()}>
+            <QrImage texto={urlEquipo(equipo.id)} size="min(76vw, 340px)" className="mx-auto" />
+            <div className="font-medium text-slate-800 mt-3" style={{ fontSize: 18 }}>{equipo.nombre}</div>
+            <div className="text-slate-600 font-semibold mt-0.5" style={{ fontSize: 22, letterSpacing: ".02em" }}>{equipo.serie || "Sin número de serie"}</div>
+            <button onClick={() => setVerQr(false)} className="w-full rounded-xl border border-slate-200 bg-white text-slate-600 mt-4 flex items-center justify-center gap-2" style={{ minHeight: 48, fontSize: 15 }}>
+              <X size={17} /> Cerrar
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

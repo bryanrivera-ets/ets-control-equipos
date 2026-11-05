@@ -1,1 +1,57 @@
 @import "tailwindcss";
+
+/* ---------------------------------------------------- ETIQUETAS QR (imprimir) */
+/* Hoja tamaño carta, 3 columnas x 10 filas de 2⅝" x 1" (tipo Avery 5160 / 8160) */
+.etiquetas-print { display: none; }
+
+@media print {
+  @page { size: letter; margin: 0; }
+  body:has(.etiquetas-print) > #root { display: none !important; }
+  body:has(.etiquetas-print) { background: #fff !important; margin: 0; }
+  .etiquetas-print { display: block; }
+
+  .etiquetas-hoja {
+    box-sizing: border-box;
+    width: 8.5in;
+    padding: 0.5in 0.1875in 0;
+    display: grid;
+    grid-template-columns: repeat(3, 2.625in);
+    grid-auto-rows: 1in;
+    column-gap: 0.125in;
+    break-after: page;
+    page-break-after: always;
+  }
+  .etiquetas-hoja:last-child { break-after: auto; page-break-after: auto; }
+
+  .etiqueta {
+    box-sizing: border-box;
+    display: flex;
+    align-items: center;
+    gap: 0.08in;
+    padding: 0.07in 0.1in;
+    overflow: hidden;
+    font-family: system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+    color: #000;
+    break-inside: avoid;
+  }
+  .etiqueta-qr { flex: none; width: 0.86in; height: 0.86in; line-height: 0; }
+  .etiqueta-texto { flex: 1; min-width: 0; display: flex; flex-direction: column; justify-content: center; }
+  .etiqueta-nombre {
+    font-size: 8pt;
+    line-height: 1.15;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+  .etiqueta-serie {
+    font-size: 14pt;
+    font-weight: 700;
+    line-height: 1.1;
+    margin-top: 0.03in;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .etiqueta-marca { font-size: 7pt; font-weight: 600; letter-spacing: 0.04em; margin-top: 0.03in; }
+}
