@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useCallback } from "react";
+import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { supabase } from "./supabaseClient";
 import * as XLSX from "xlsx";
 import {
@@ -150,6 +150,48 @@ function Main({ session, onLogout }) {
   }, []);
 
   useEffect(() => { cargarDatos(); }, [cargarDatos]);
+
+  // Vista y equipo abiertos, para leerlos desde los avisos de Realtime sin volver a suscribirse
+  const viewRef = useRef(view);
+  const selectedIdRef = useRef(selectedId);
+  useEffect(() => { viewRef.current = view; selectedIdRef.current = selectedId; }, [view, selectedId]);
+
+  // Recarga los datos y, si hay un equipo abierto en detalle, también su historial
+  const recargarEnVivo = useCallback(async () => {
+    await cargarDatos();
+    const id = selectedIdRef.current;
+    if (viewRef.current !== "detail" || !id) return;
+    const { data } = await supabase.from("movimientos").select("*").eq("equipo_id", id).order("created_at", { ascending: false });
+    if (viewRef.current === "detail" && selectedIdRef.current === id) setMovs(data || []);
+  }, [cargarDatos]);
+
+  // Actualización en vivo: escucha cambios de otros usuarios y recarga (agrupando avisos seguidos)
+  useEffect(() => {
+    let timer = null;
+    const programarRecarga = () => {
+      clearTimeout(timer);
+      timer = setTimeout(recargarEnVivo, 500);
+    };
+
+    const tablas = ["equipos", "movimientos", "ubicaciones", "categorias", "vehiculos", "mantenimientos_flota"];
+    const canal = supabase.channel("cambios-en-vivo");
+    tablas.forEach((table) => {
+      canal.on("postgres_changes", { event: "*", schema: "public", table }, programarRecarga);
+    });
+    canal.subscribe();
+
+    // Al volver de segundo plano (p. ej. iPad bloqueado), recargar por si se perdió algún aviso
+    const alCambiarVisibilidad = () => {
+      if (document.visibilityState === "visible") programarRecarga();
+    };
+    document.addEventListener("visibilitychange", alCambiarVisibilidad);
+
+    return () => {
+      clearTimeout(timer);
+      document.removeEventListener("visibilitychange", alCambiarVisibilidad);
+      supabase.removeChannel(canal);
+    };
+  }, [recargarEnVivo]);
 
   const openDetail = useCallback(async (id, from = "list") => {
     setSelectedId(id); setDetailBack(from); setView("detail"); setMovs([]);
