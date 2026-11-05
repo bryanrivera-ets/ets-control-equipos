@@ -4,14 +4,15 @@ import {
 } from "lucide-react";
 import { NAVY, AMBER, WRAP } from "../lib/constants";
 import { SubHeader } from "../components/SubHeader";
+import { EtiquetasQR } from "../components/EtiquetasQR";
 
-export function AdminView({ ubicaciones, categorias, onBack, onAdd, onDelete, onAddCategoria, onDeleteCategoria, soloProyectos = false }) {
+export function AdminView({ ubicaciones, categorias, equipos = [], onBack, onAdd, onDelete, onAddCategoria, onDeleteCategoria, soloProyectos = false }) {
   const [tab, setTab] = useState("proyecto");
   const [nuevo, setNuevo] = useState("");
   const [delId, setDelId] = useState(null);
   const [busy, setBusy] = useState(false);
 
-  const todasTabs = [["proyecto", "Proyectos"], ["brigada", "Brigadas"], ["camion", "Camiones"], ["almacen", "Estantes"], ["categoria", "Categorías"]];
+  const todasTabs = [["proyecto", "Proyectos"], ["brigada", "Brigadas"], ["camion", "Camiones"], ["almacen", "Estantes"], ["categoria", "Categorías"], ["etiquetas", "Etiquetas QR"]];
   const tabs = soloProyectos ? todasTabs.filter(([k]) => k === "proyecto") : todasTabs;
   const esCategoria = tab === "categoria";
   const items = esCategoria ? categorias : ubicaciones.filter((u) => u.tipo === tab);
@@ -41,6 +42,7 @@ export function AdminView({ ubicaciones, categorias, onBack, onAdd, onDelete, on
           ))}
         </div>
 
+        {tab === "etiquetas" ? <EtiquetasQR equipos={equipos} /> : <>
         <div className="bg-white rounded-xl border border-slate-200 p-3 mt-3">
           <div className="text-slate-400 mb-2" style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: ".04em" }}>Añadir a {nombreTab}</div>
           <div className="flex gap-2">
@@ -90,6 +92,7 @@ export function AdminView({ ubicaciones, categorias, onBack, onAdd, onDelete, on
             ? "Nota: eliminar una categoría solo la quita del menú de equipo nuevo. Los equipos que ya la tienen la conservan."
             : "Nota: eliminar un lugar solo lo quita de los menús. Las máquinas que ya están ahí conservan su ubicación hasta que las muevas."}
         </div>
+        </>}
       </div>
     </div>
   );

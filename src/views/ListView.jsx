@@ -1,13 +1,13 @@
 import etsSimbolo from "../assets/ets-simbolo.png";
 import {
-  Search, ChevronRight, LogOut, ArrowLeftRight, Loader2, CheckCircle2, Circle, Upload, Settings, Download, Wrench, Truck,
+  Search, ChevronRight, LogOut, ArrowLeftRight, Loader2, CheckCircle2, Circle, Upload, Settings, Download, Wrench, Truck, ScanLine,
 } from "lucide-react";
 import { NAVY, NAVY_SOFT, AMBER, WRAP, SAFE_TOP, tipoMeta } from "../lib/constants";
 import { diasEn, textoDias, servicioVencido } from "../lib/utils";
 import { Pill } from "../components/Pill";
 import { CatTile } from "../components/CatTile";
 
-export function ListView({ modo, equipos, conteo, filtro, setFiltro, query, setQuery, onItem, session, onLogout, seleccion = [], onContinuar, isAdmin, onImport, onPlantilla, importMsg, onCerrarMsg, onAdmin, onFlota }) {
+export function ListView({ modo, equipos, conteo, filtro, setFiltro, query, setQuery, onItem, session, onLogout, seleccion = [], onContinuar, isAdmin, onImport, onPlantilla, importMsg, onCerrarMsg, onAdmin, onFlota, onEscanear }) {
   const cards = [["almacen", "Almacén"], ["proyecto", "Proyecto"], ["camion", "Camión"], ["taller", "Taller"]];
   const chips = [["todos", "Todos"], ["almacen", "Almacén"], ["proyecto", "Proyecto"], ["camion", "Camión"], ["taller", "Taller"]];
   if (modo === "equipos") chips.push(["retirados", "Retirados"]);
@@ -42,6 +42,7 @@ export function ListView({ modo, equipos, conteo, filtro, setFiltro, query, setQ
                 </div>
               </div>
               <div className="flex gap-5 items-center" style={{ color: "#cdd6e4" }}>
+                <button onClick={onEscanear} title="Escanear código QR"><ScanLine size={21} /></button>
                 {(session.rol === "admin" || session.rol === "pm") && <button onClick={onAdmin} title="Administración"><Settings size={20} /></button>}
                 <button onClick={onFlota} title="Flota"><Truck size={21} /></button>
                 <button onClick={onLogout} title="Salir"><LogOut size={20} /></button>
