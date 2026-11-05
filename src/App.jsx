@@ -518,8 +518,9 @@ function Main({ session, onLogout }) {
               onBack={() => setView("flota")} onRegistrar={registrarMant}
               onEliminarMant={eliminarMant} onEliminarVeh={eliminarVehiculo} />
           )}
-          {view === "admin" && session.rol === "admin" && (
+          {view === "admin" && (session.rol === "admin" || session.rol === "pm") && (
             <AdminView ubicaciones={ubicaciones} categorias={categorias} onBack={() => setView("list")}
+              soloProyectos={session.rol === "pm"}
               onAdd={agregarUbicacion} onDelete={eliminarUbicacion}
               onAddCategoria={agregarCategoria} onDeleteCategoria={eliminarCategoria} />
           )}
@@ -611,7 +612,7 @@ function ListView({ modo, equipos, conteo, filtro, setFiltro, query, setQuery, o
                 </div>
               </div>
               <div className="flex gap-5 items-center" style={{ color: "#cdd6e4" }}>
-                {session.rol === "admin" && <button onClick={onAdmin} title="Administración"><Settings size={20} /></button>}
+                {(session.rol === "admin" || session.rol === "pm") && <button onClick={onAdmin} title="Administración"><Settings size={20} /></button>}
                 <button onClick={onFlota} title="Flota"><Truck size={21} /></button>
                 <button onClick={onLogout} title="Salir"><LogOut size={20} /></button>
               </div>
@@ -1474,13 +1475,14 @@ function VehiculoView({ vehiculo, mants, isAdmin, onBack, onRegistrar, onElimina
   );
 }
 
-function AdminView({ ubicaciones, categorias, onBack, onAdd, onDelete, onAddCategoria, onDeleteCategoria }) {
+function AdminView({ ubicaciones, categorias, onBack, onAdd, onDelete, onAddCategoria, onDeleteCategoria, soloProyectos = false }) {
   const [tab, setTab] = useState("proyecto");
   const [nuevo, setNuevo] = useState("");
   const [delId, setDelId] = useState(null);
   const [busy, setBusy] = useState(false);
 
-  const tabs = [["proyecto", "Proyectos"], ["brigada", "Brigadas"], ["camion", "Camiones"], ["almacen", "Estantes"], ["categoria", "Categorías"]];
+  const todasTabs = [["proyecto", "Proyectos"], ["brigada", "Brigadas"], ["camion", "Camiones"], ["almacen", "Estantes"], ["categoria", "Categorías"]];
+  const tabs = soloProyectos ? todasTabs.filter(([k]) => k === "proyecto") : todasTabs;
   const esCategoria = tab === "categoria";
   const items = esCategoria ? categorias : ubicaciones.filter((u) => u.tipo === tab);
   const nombreTab = tabs.find(([k]) => k === tab)[1];
@@ -1498,7 +1500,7 @@ function AdminView({ ubicaciones, categorias, onBack, onAdd, onDelete, onAddCate
 
   return (
     <div className="flex-1 pb-28">
-      <SubHeader title="Administración" onBack={onBack} />
+      <SubHeader title={soloProyectos ? "Proyectos" : "Administración"} onBack={onBack} />
       <div className={`${WRAP} p-4`}>
 
         <div className="flex gap-2 overflow-x-auto pb-1">
